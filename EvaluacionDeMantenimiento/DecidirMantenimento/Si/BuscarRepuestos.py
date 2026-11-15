@@ -28,9 +28,8 @@ logger.setLevel(logging.INFO)
 db = boto3.resource("dynamodb")
 
 TABLE_NAME = os.environ.get(
-    "PARTS_TABLE_NAME", "t_repuestos"
+    "PARTS_TABLE_NAME", "t_parts"
 )
-
 table = db.Table(TABLE_NAME)
 
 
