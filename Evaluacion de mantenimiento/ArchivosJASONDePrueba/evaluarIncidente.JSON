@@ -1,0 +1,32 @@
+{
+  "tenant_id": "MINA_A",
+  "machine_id": "MAC-102",
+
+  "anomaly_result": {
+    "anomaly_detected": true,
+    "anomalies": [
+      {
+        "variable": "temperature",
+        "value": 105,
+        "anomaly_score": 0.91
+      },
+      {
+        "variable": "vibration",
+        "value": 8.2,
+        "anomaly_score": 0.88
+      }
+    ]
+  },
+
+  "pattern_result": {
+    "pattern_detected": true,
+    "confidence": 0.86
+  },
+
+  "historical_result": {
+    "historical_pattern_detected": true,
+    "similar_incidents": 3,
+    "recurrence_detected": true,
+    "historical_risk_score": 78
+  }
+}

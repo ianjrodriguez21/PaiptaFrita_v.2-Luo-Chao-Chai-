@@ -1,0 +1,19 @@
+{
+  "tenant_id": "MINA_A",
+  "machine_id": "MAC-102",
+  "machine_type": "excavator",
+  "timestamp": "2026-11-15T10:30:00Z",
+  "latitude": -12.05,
+  "longitude": -77.03,
+  "operating_hours": 1250,
+  "temperature": 105,
+  "vibration": 8.2,
+  "pressure": 220,
+  "fuel_consumption": 32,
+  "fuel_level_liters": 204,
+  "fuel_level_percentage": 76,
+  "load_transported": 15000,
+  "speed": 5.5,
+  "engine_rpm": 1850,
+  "current_status": "operational"
+}
