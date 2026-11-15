@@ -1,4 +1,3 @@
-
 import json
 import boto3
 import os
@@ -19,11 +18,9 @@ ALERTS_TABLE_NAME = os.environ.get(
     't_alertas_flotas'
 )
 
-
 def lambda_handler(event, context):
-
     try:
-        # 1. Recibir telemetría
+        # 1. Recibir telemetría (Adaptado para Step Functions o invocación directa)
         if 'body' in event:
             telemetry = json.loads(event['body'])
         else:
@@ -33,18 +30,13 @@ def lambda_handler(event, context):
         machine_id = telemetry.get('machine_id')
 
         if not tenant_id or not machine_id:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'error': 'Falta tenant_id o machine_id'
-                })
-            }
+            raise ValueError("Falta tenant_id o machine_id")
 
-        # 2. Extraer variables para el modelo
+        # 2. Extraer variables con los nombres exactos en inglés del JSON
         features = [
-            float(telemetry['temperatura_motor']),
-            float(telemetry['velocidad']),
-            float(telemetry['combustible'])
+            float(telemetry.get('temperature', 0)),
+            float(telemetry.get('vibration', 0)),
+            float(telemetry.get('pressure', 0))
         ]
 
         # 3. Preparar solicitud para SageMaker
@@ -60,64 +52,58 @@ def lambda_handler(event, context):
         )
 
         # 4. Obtener predicción del modelo
-        prediction = json.loads(
-            response['Body'].read().decode('utf-8')
-        )
+        prediction = json.loads(response['Body'].read().decode('utf-8'))
 
-        # El modelo devuelve:
-        # -1 = Anomalía
-        #  1 = Normal
+        # El modelo devuelve: -1 = Anomalía, 1 = Normal
+        is_anomaly = prediction.get('prediction') == -1
+        anomaly_score = prediction.get('anomaly_score', 0.0)
+        
+        timestamp = telemetry.get('timestamp', datetime.utcnow().isoformat() + "Z")
 
-        is_anomaly = prediction['prediction'] == -1
+        # 5. Construir la salida estricta para Step Functions
+        salida = {
+            "tenant_id": tenant_id,
+            "machine_id": machine_id,
+            "timestamp": timestamp,
+            "anomaly_detected": is_anomaly
+        }
 
-        anomaly_score = prediction.get('anomaly_score')
-
-        # 5. Registrar anomalía si corresponde
+        # 6. Registrar anomalía si corresponde
         if is_anomaly:
+            # Agregar detalle de anomalías a la salida
+            salida["anomalies"] = [
+                {
+                    "variable": "temperature",
+                    "value": telemetry.get('temperature'),
+                    "anomaly_score": round(anomaly_score, 2)
+                },
+                {
+                    "variable": "vibration",
+                    "value": telemetry.get('vibration'),
+                    "anomaly_score": round(anomaly_score, 2)
+                }
+            ]
 
             table = dynamodb.Table(ALERTS_TABLE_NAME)
 
+            # Usamos tenant_id y sk (machine_id#timestamp) para tener un buen indexado
             alert = {
                 'tenant_id': tenant_id,
+                'sk': f"{machine_id}#{timestamp}",
                 'alert_id': str(uuid.uuid4()),
                 'machine_id': machine_id,
-                'timestamp': telemetry.get(
-                    'timestamp',
-                    datetime.utcnow().isoformat()
-                ),
+                'timestamp': timestamp,
                 'tipo': 'ANOMALIA_DETECTADA',
-                'telemetria': json.loads(
-                    json.dumps(telemetry),
-                    parse_float=Decimal
-                ),
-                'anomaly_score': Decimal(str(anomaly_score))
-                    if anomaly_score is not None else None
+                'telemetria': json.loads(json.dumps(telemetry), parse_float=Decimal),
+                'anomalies': json.loads(json.dumps(salida["anomalies"]), parse_float=Decimal)
             }
 
             table.put_item(Item=alert)
 
-        # 6. Devolver resultado
-        return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'machine_id': machine_id,
-                'anomaly_detected': is_anomaly,
-                'anomaly_score': anomaly_score,
-                'message': (
-                    'Anomalia detectada'
-                    if is_anomaly
-                    else 'Funcionamiento normal'
-                )
-            })
-        }
+        # 7. Retornar el diccionario directamente (Ideal para Step Functions)
+        return salida
 
     except Exception as e:
-
         print(f"Error detectando anomalias: {str(e)}")
-
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': str(e)
-            })
-        }
+        # Lanzar la excepción para que Step Functions la intercepte
+        raise e
