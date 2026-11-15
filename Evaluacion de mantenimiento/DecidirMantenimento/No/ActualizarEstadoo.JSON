@@ -1,0 +1,17 @@
+{
+  "tenant_id": "MINA_A",
+  "machine_id": "MAC-102",
+  "incident_required": false,
+  "incident_type": "historical_risk_detected",
+  "severity": "low",
+  "priority": "low",
+  "risk_score": 15,
+  "recommended_state": "normal",
+  "analysis": {
+    "anomaly_score": 10,
+    "pattern_detected": false,
+    "pattern_score": 0,
+    "historical_risk_score": 25,
+    "anomalous_variables": []
+  }
+}
