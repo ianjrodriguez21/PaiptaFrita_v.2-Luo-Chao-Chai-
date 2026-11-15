@@ -33,13 +33,13 @@ client = boto3.client("dynamodb")
 serializer = TypeSerializer()
 
 TECHNICIANS_TABLE = os.environ.get(
-    "TECHNICIANS_TABLE_NAME", "t_tecnicos"
+    "TECHNICIANS_TABLE_NAME", "t_technicians"
 )
 ASSIGNMENTS_TABLE = os.environ.get(
-    "ASSIGNMENTS_TABLE_NAME", "t_asignaciones"
+    "ASSIGNMENTS_TABLE_NAME", "t_assignments"
 )
 INCIDENTS_TABLE = os.environ.get(
-    "INCIDENTS_TABLE_NAME", "t_incidentes"
+    "INCIDENTS_TABLE_NAME", "t_incidents"
 )
 
 assignments = db.Table(ASSIGNMENTS_TABLE)
