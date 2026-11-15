@@ -1,6 +1,10 @@
 service: arquifusioncorp
 
 frameworkVersion: '4'
+params:
+  dev:
+    anomalyEndpoint: arquifusioncorp-dev-anomalies
+    patternsEndpoint: arquifusioncorp-dev-patterns
 
 plugins:
   - serverless-step-functions
@@ -72,6 +76,8 @@ package:
     - '!**/__pycache__/**'
     - '!**/*.pyc'
     - '!README.md'
+    - '!.venv/**'
+    - '!machinAprendiendo/**'
 
 functions:
 
@@ -123,35 +129,35 @@ functions:
   # ==================================
 
   actualizarEstado:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.No.ActualizarEstado.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.No.ActualizarEstado.lambda_handler
 
   # ==================================
   # GESTION DE INCIDENTES
   # ==================================
 
   crearIncidente:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.Si.CrearIncidente.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.Si.CrearIncidente.lambda_handler
 
   tecnicosDisponibles:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.Si.TecnicosDisponibles.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.Si.TecnicosDisponibles.lambda_handler
 
   asignarTecnico:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.Si.AsignarTecnico.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.Si.AsignarTecnico.lambda_handler
 
   buscarRepuestos:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.Si.BuscarRepuestos.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.Si.BuscarRepuestos.lambda_handler
 
   reservarRepuestos:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.Si.ReservarRepuestos.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.Si.ReservarRepuestos.lambda_handler
 
   registrarIntervenccion:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.Si.RegistrarIntervenccion.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.Si.RegistrarIntervenccion.lambda_handler
 
   cerrarIncidente:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.CerrarIncidente.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.CerrarIncidente.lambda_handler
 
   notificarUsuario:
-    handler: evaluacion_mantenimiento.DecidirMantenimento.NotificarUsuario.lambda_handler
+    handler: EvaluacionDeMantenimiento.DecidirMantenimento.NotificarUsuario.lambda_handler
 
   # ==================================
   # ANALISIS OPERATIVO
