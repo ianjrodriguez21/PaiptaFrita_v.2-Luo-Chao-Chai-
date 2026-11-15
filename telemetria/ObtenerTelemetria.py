@@ -136,6 +136,7 @@ def lambda_handler(event, context):
 
         # 3. Guardar histórico en S3
         s3_key = (
+            f"telemetria/"
             f"{tenant_id}/"
             f"{machine_id}/"
             f"{timestamp}_{event_id[:16]}.json"
