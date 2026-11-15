@@ -49,7 +49,9 @@ class DashboardQueries(unittest.TestCase):
     def test_dashboard_identifies_missing_data_sources(self):
         result = ObtenerDashboard.lambda_handler(event(), None)
         self.assertEqual(result["statusCode"], 200)
-        self.assertEqual(json.loads(result["body"])["sections"]["maintenance"], {"status": "not_configured"})
+        sections = json.loads(result["body"])["sections"]
+        self.assertEqual(set(sections), {"machines", "incidents", "utilization", "efficacy", "predictions"})
+        self.assertTrue(all(section == {"status": "not_configured"} for section in sections.values()))
 
     def test_invalid_limit(self):
         result = ObtenerMaquinas.lambda_handler(event(queryStringParameters={"limit": "1000"}), None)
