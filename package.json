@@ -1,11 +1,9 @@
-
 {
   "name": "arquifusioncorp",
   "version": "1.0.0",
   "private": true,
-  "description": "Infraestructura serverless de ArquiFusionCorp",
   "devDependencies": {
-    "serverless": "^4.0.0",
-    "serverless-step-functions": "^3.0.0"
+    "serverless": "4.46.0",
+    "serverless-step-functions": "3.31.2"
   }
 }

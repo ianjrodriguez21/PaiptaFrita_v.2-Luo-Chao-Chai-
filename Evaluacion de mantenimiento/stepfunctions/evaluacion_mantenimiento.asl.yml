@@ -1,11 +1,10 @@
-
-Comment: ArquiFusionCorp - Mantenimiento predictivo
+Comment: ArquiFusionCorp - Evaluacion de mantenimiento
 StartAt: DetectarAnomalias
 
 States:
 
   # ====================================
-  # ETAPA 1: EVALUACION
+  # DETECCION Y EVALUACION
   # ====================================
 
   DetectarAnomalias:
@@ -91,7 +90,7 @@ States:
     Next: DecidirMantenimiento
 
   # ====================================
-  # ETAPA 2: DECISION
+  # DECISION DE MANTENIMIENTO
   # ====================================
 
   DecidirMantenimiento:
@@ -116,7 +115,7 @@ States:
     Default: DecisionInvalida
 
   # ====================================
-  # RAMA NORMAL
+  # OPERACION NORMAL
   # ====================================
 
   ActualizarEstado:
@@ -138,7 +137,7 @@ States:
     End: true
 
   # ====================================
-  # RAMA PREVENTIVA
+  # PROGRAMACION PREVENTIVA
   # ====================================
 
   PendienteProgramacionPreventiva:
@@ -150,7 +149,7 @@ States:
     End: true
 
   # ====================================
-  # RAMA DE INCIDENTES
+  # CREACION DE INCIDENTES
   # ====================================
 
   CrearIncidente:
@@ -164,7 +163,8 @@ States:
         Next: ErrorEnEvaluacion
     Next: NotificacionConfigurada
 
-  # Notificacion inicial opcional
+  # Notificar solo cuando hay un destinatario
+  # y una solicitud de notificacion definida.
   NotificacionConfigurada:
     Type: Choice
     Choices:
@@ -176,6 +176,7 @@ States:
           - Variable: $.notification_request.notification_type
             IsPresent: true
         Next: NotificarUsuario
+
     Default: RevisarTipoAtencion
 
   NotificarUsuario:
@@ -198,6 +199,10 @@ States:
         Next: RevisarTipoAtencion
     Next: RevisarTipoAtencion
 
+  # ====================================
+  # CLASIFICAR TIPO DE ATENCION
+  # ====================================
+
   RevisarTipoAtencion:
     Type: Choice
     Choices:
@@ -215,6 +220,7 @@ States:
     Type: Pass
     Result:
       workflow_status: pending_maintenance_scheduling
+      message: Incident requires scheduled maintenance
     ResultPath: $.workflow_result
     End: true
 
@@ -239,6 +245,7 @@ States:
       - Variable: $.technicians_result.technician_found
         BooleanEquals: true
         Next: AsignarTecnico
+
     Default: PendienteTecnico
 
   AsignarTecnico:
@@ -258,12 +265,14 @@ States:
       - Variable: $.assignment_result.assignment_status
         StringEquals: assigned
         Next: BuscarRepuestos
+
     Default: PendienteTecnico
 
   PendienteTecnico:
     Type: Pass
     Result:
       workflow_status: pending_technician
+      message: No available technician assigned
     ResultPath: $.workflow_result
     End: true
 
@@ -316,12 +325,14 @@ States:
       - Variable: $.reservation_result.all_reserved
         BooleanEquals: true
         Next: PendienteIntervencion
+
     Default: PendienteRepuestos
 
   PendienteDiagnosticoRepuestos:
     Type: Pass
     Result:
       workflow_status: pending_parts_diagnosis
+      message: Required parts must be defined
     ResultPath: $.workflow_result
     End: true
 
@@ -329,18 +340,19 @@ States:
     Type: Pass
     Result:
       workflow_status: pending_parts
+      message: Required parts are not available
     ResultPath: $.workflow_result
     End: true
 
   # ====================================
-  # INTERVENCION HUMANA PENDIENTE
+  # INTERVENCION HUMANA
   # ====================================
 
   PendienteIntervencion:
     Type: Pass
     Result:
       workflow_status: pending_human_intervention
-      message: Waiting for technician confirmation
+      message: Technician intervention is pending
     ResultPath: $.workflow_result
     End: true
 
@@ -356,4 +368,4 @@ States:
   ErrorEnEvaluacion:
     Type: Fail
     Error: MaintenanceWorkflowFailed
-    Cause: A maintenance task failed
+    Cause: A maintenance workflow task failed
