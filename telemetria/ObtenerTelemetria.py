@@ -10,7 +10,7 @@ s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 
 # Variables de entorno (configuradas en la consola de AWS Lambda)
-S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'tu-bucket-telemetria-historico')
+S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'bucket-telemetria-historico')
 DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 't_telemetria_actual')
 
 def lambda_handler(event, context):
