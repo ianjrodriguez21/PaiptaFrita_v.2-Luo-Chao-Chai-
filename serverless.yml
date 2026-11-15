@@ -77,12 +77,6 @@ provider:
     INTERVENTIONS_TABLE_NAME:
       Ref: IntervencionesTable
 
-    # MANTENIMIENTOS - NUEVO
-    MAINTENANCE_TABLE_NAME:
-      Ref: MantenimientoTable
-
-    MAINTENANCE_SORT_KEY: sk
-
     # S3
     S3_BUCKET_NAME:
       Ref: TelemetryBucket
