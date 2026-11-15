@@ -1,10 +1,10 @@
 Resources:
 
-  # 1. MAQUINAS
+  # 1. MACHINES
   MaquinaTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_maquina
+      TableName: ${sls:stage}-t_machines
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -17,11 +17,11 @@ Resources:
         - AttributeName: machine_id
           KeyType: RANGE
 
-  # 2. ANOMALIAS
+  # 2. ANOMALIES
   AnomaliasTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_anomalias
+      TableName: ${sls:stage}-t_anomalies
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -45,11 +45,11 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # 3. PATRONES
+  # 3. PATTERNS
   PatronesTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_patrones
+      TableName: ${sls:stage}-t_patterns
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -62,11 +62,11 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
-  # 4. ANALISIS HISTORICO
+  # 4. HISTORICAL ANALYSIS
   AnalisisTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_analisis
+      TableName: ${sls:stage}-t_analysis
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -79,11 +79,11 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
-  # 5. INCIDENTES
+  # 5. INCIDENTS
   IncidentesTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_incidentes
+      TableName: ${sls:stage}-t_incidents
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -96,11 +96,11 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
-  # 6. TECNICOS
+  # 6. TECHNICIANS
   TecnicosTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_tecnicos
+      TableName: ${sls:stage}-t_technicians
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -113,11 +113,11 @@ Resources:
         - AttributeName: technician_id
           KeyType: RANGE
 
-  # 7. ASIGNACIONES
+  # 7. ASSIGNMENTS
   AsignacionesTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_asignaciones
+      TableName: ${sls:stage}-t_assignments
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -130,11 +130,11 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
-  # 8. REPUESTOS
+  # 8. SPARE PARTS
   RepuestosTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_repuestos
+      TableName: ${sls:stage}-t_spareparts
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -147,11 +147,11 @@ Resources:
         - AttributeName: part_id
           KeyType: RANGE
 
-  # 9. RESERVAS DE REPUESTOS
+  # 9. SPARE PART RESERVATIONS
   ReservasRepuestosTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_reservas_repuestos
+      TableName: ${sls:stage}-t_reservations
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -164,11 +164,11 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
-  # 10. INTERVENCIONES
+  # 10. INTERVENTIONS
   IntervencionesTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_intervenciones
+      TableName: ${sls:stage}-t_interventions
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -181,11 +181,11 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
-  # 11. UTILIZACION
+  # 11. UTILIZATION
   UtilizacionTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_utilizacion
+      TableName: ${sls:stage}-t_utilization
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -198,11 +198,11 @@ Resources:
         - AttributeName: machine_id
           KeyType: RANGE
 
-  # 12. EFICACIA
+  # 12. EFFICACY
   EficaciaTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_eficacia
+      TableName: ${sls:stage}-t_efficacy
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
@@ -215,11 +215,11 @@ Resources:
         - AttributeName: fecha
           KeyType: RANGE
 
-  # 13. PREDICCION DE REPUESTOS
+  # 13. SPARE PARTS PREDICTION
   PrediccionRepuestosTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: ${sls:stage}-t_prediccion_repuestos
+      TableName: ${sls:stage}-t_spareparts_prediction
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: tenant_id
