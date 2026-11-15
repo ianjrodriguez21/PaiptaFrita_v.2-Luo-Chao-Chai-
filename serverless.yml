@@ -15,9 +15,9 @@ provider:
   timeout: 30
   logRetentionInDays: 14
 
-  # AWS Academy - rol existente
+  # AWS Academy - rol dinámico
   iam:
-    role: arn:aws:iam::157034382038:role/LabRole
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
 
   environment:
     MACHINES_TABLE_NAME:
@@ -205,7 +205,8 @@ stepFunctions:
       name: ${self:service}-${sls:stage}-mantenimiento
       type: STANDARD
 
-      role: arn:aws:iam::157034382038:role/LabRole
+      # Rol dinámico para Step Functions
+      role: arn:aws:iam::${aws:accountId}:role/LabRole
 
       definition: ${file(./stepfunctions/evaluacion_mantenimiento.asl.yml)}
 
