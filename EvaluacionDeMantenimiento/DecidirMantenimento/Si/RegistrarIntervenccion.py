@@ -39,12 +39,12 @@ serializer = TypeSerializer()
 
 INTERVENTIONS_TABLE = os.environ.get(
     "INTERVENTIONS_TABLE_NAME",
-    "t_intervenciones"
+    "t_interventions"
 )
 
 INCIDENTS_TABLE = os.environ.get(
     "INCIDENTS_TABLE_NAME",
-    "t_incidentes"
+    "t_incidents"
 )
 
 table = db.Table(INTERVENTIONS_TABLE)
