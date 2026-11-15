@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.resource("dynamodb")
 
 TABLE_NAME = os.environ.get(
-    "TECHNICIANS_TABLE_NAME", "t_tecnicos"
+    "TECHNICIANS_TABLE_NAME", "t_technicians"
 )
 
 table = dynamodb.Table(TABLE_NAME)
