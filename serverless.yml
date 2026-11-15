@@ -1,6 +1,11 @@
 service: arquifusioncorp
 
 frameworkVersion: '4'
+
+# ====================================
+# PARAMETROS
+# ====================================
+
 params:
   dev:
     anomalyEndpoint: arquifusioncorp-dev-anomalies
@@ -8,6 +13,10 @@ params:
 
 plugins:
   - serverless-step-functions
+
+# ====================================
+# PROVEEDOR AWS
+# ====================================
 
 provider:
   name: aws
@@ -19,52 +28,77 @@ provider:
   timeout: 30
   logRetentionInDays: 14
 
-  # AWS Academy - rol dinámico
+  # AWS Academy
   iam:
     role: arn:aws:iam::${aws:accountId}:role/LabRole
 
   environment:
+
+    # MAQUINAS
     MACHINES_TABLE_NAME:
       Ref: MaquinaTable
 
+    # ANOMALIAS
     ALERTS_TABLE_NAME:
       Ref: AnomaliasTable
 
     ANOMALIES_TABLE_NAME:
       Ref: AnomaliasTable
 
+    # PATRONES
     PATTERNS_TABLE_NAME:
       Ref: PatronesTable
 
+    # ANALISIS HISTORICO
     ANALYSIS_TABLE_NAME:
       Ref: AnalisisTable
 
+    # INCIDENTES
     INCIDENTS_TABLE_NAME:
       Ref: IncidentesTable
 
+    # TECNICOS
     TECHNICIANS_TABLE_NAME:
       Ref: TecnicosTable
 
+    # ASIGNACIONES
     ASSIGNMENTS_TABLE_NAME:
       Ref: AsignacionesTable
 
+    # REPUESTOS
     PARTS_TABLE_NAME:
       Ref: RepuestosTable
 
+    # RESERVAS DE REPUESTOS
     RESERVATIONS_TABLE_NAME:
       Ref: ReservasRepuestosTable
 
+    # INTERVENCIONES
     INTERVENTIONS_TABLE_NAME:
       Ref: IntervencionesTable
 
+    # MANTENIMIENTOS - NUEVO
+    MAINTENANCE_TABLE_NAME:
+      Ref: MantenimientoTable
+
+    MAINTENANCE_SORT_KEY: sk
+
+    # S3
     S3_BUCKET_NAME:
       Ref: TelemetryBucket
 
+    # SNS
     SNS_TOPIC_ARN:
       Ref: NotificationsTopic
 
+    # SAGEMAKER
     SAGEMAKER_ENDPOINT: ${param:anomalyEndpoint, 'NOT_CONFIGURED'}
+
     SAGEMAKER_PATTERNS_ENDPOINT: ${param:patternsEndpoint, 'NOT_CONFIGURED'}
+
+# ====================================
+# EMPAQUETADO
+# ====================================
 
 package:
   patterns:
@@ -73,11 +107,15 @@ package:
     - '!stepfunctions/**'
     - '!.git/**'
     - '!.serverless/**'
+    - '!.venv/**'
+    - '!machinAprendiendo/**'
     - '!**/__pycache__/**'
     - '!**/*.pyc'
     - '!README.md'
-    - '!.venv/**'
-    - '!machinAprendiendo/**'
+
+# ====================================
+# FUNCIONES LAMBDA
+# ====================================
 
 functions:
 
@@ -87,11 +125,14 @@ functions:
 
   obtenerTelemetria:
     name: ${self:service}-${sls:stage}-obtenerTelemetria
+
     handler: telemetria.ObtenerTelemetria.lambda_handler
+
     timeout: 25
 
     environment:
       STATE_MACHINE_ARN: arn:aws:states:${aws:region}:${aws:accountId}:stateMachine:${self:service}-${sls:stage}-mantenimiento
+
     events:
       - httpApi:
           path: /telemetria
@@ -165,6 +206,7 @@ functions:
 
   calcularUtilizacion:
     handler: AnalisisOperativo.calcularUtilizacion.lambda_handler
+
     environment:
       DYNAMODB_TABLE_NAME:
         Ref: UtilizacionTable
@@ -177,6 +219,7 @@ functions:
 
   analizarEficacia:
     handler: AnalisisOperativo.analizarEficacia.lambda_handler
+
     environment:
       DYNAMODB_TABLE_NAME:
         Ref: EficaciaTable
@@ -189,6 +232,7 @@ functions:
 
   predecirRepuestos:
     handler: AnalisisOperativo.predecirRepuestos.lambda_handler
+
     environment:
       DYNAMODB_TABLE_NAME:
         Ref: PrediccionRepuestosTable
@@ -211,7 +255,6 @@ stepFunctions:
       name: ${self:service}-${sls:stage}-mantenimiento
       type: STANDARD
 
-      # Rol dinámico para Step Functions
       role: arn:aws:iam::${aws:accountId}:role/LabRole
 
       definition: ${file(./stepfunctions/evaluacion_mantenimiento.asl.yml)}
