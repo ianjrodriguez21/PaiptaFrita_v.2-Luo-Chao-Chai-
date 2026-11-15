@@ -436,7 +436,8 @@ def lambda_handler(event, context):
             "analysis_window_days": window_days
         }
 
-        # 6. Guardar resultado en t_analisis
+        
+        # 6. Preparar registro historico
         machine_timestamp = (
             f"{machine_id}#{to_timestamp(event_time)}"
         )
@@ -455,37 +456,46 @@ def lambda_handler(event, context):
             "analysis_id": analysis_id
         }
 
+        # 7. Guardar en DynamoDB
         dynamodb_item = json.loads(
             json.dumps(item),
             parse_float=Decimal
         )
 
-        # El mismo evento reemplaza su propio analisis,
-        # en lugar de generar un registro duplicado.
         analysis_table.put_item(
             Item=dynamodb_item
         )
 
-        # 7. Opcional: guardar en S3
-        if ANALYSIS_BUCKET_NAME:
-            key = (
-                f"{tenant_id}/{machine_id}/"
-                f"{to_timestamp(event_time)}.json"
+        # 8. Guardar una copia en el nuevo S3
+        if not ANALYSIS_BUCKET_NAME:
+            raise ValueError(
+                "ANALYSIS_BUCKET_NAME no configurado"
             )
 
-            s3.put_object(
-                Bucket=ANALYSIS_BUCKET_NAME,
-                Key=key,
-                Body=json.dumps(result).encode("utf-8"),
-                ContentType="application/json"
-            )
+        s3_key = (
+            f"analisis-historico/"
+            f"{tenant_id}/"
+            f"{machine_id}/"
+            f"{to_timestamp(event_time)}.json"
+        )
+
+        s3.put_object(
+            Bucket=ANALYSIS_BUCKET_NAME,
+            Key=s3_key,
+            Body=json.dumps(
+                item,
+                ensure_ascii=False,
+                indent=2
+            ).encode("utf-8"),
+            ContentType="application/json"
+        )
 
         logger.info(
             "Analisis historico completado: %s",
             machine_id
         )
 
-        # 8. Salida directa para Step Functions
+        # 9. Salida directa para Step Functions
         return result
 
     except Exception:

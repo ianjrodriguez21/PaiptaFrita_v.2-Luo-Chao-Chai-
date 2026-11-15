@@ -29,3 +29,31 @@ Resources:
             Status: Enabled
             AbortIncompleteMultipartUpload:
               DaysAfterInitiation: 7
+
+
+  # ====================================
+  # S3 - ANALISIS HISTORICO
+  # ====================================
+
+  HistoricalAnalysisBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: ${self:service}-${sls:stage}-${aws:accountId}-${aws:region}-historical-analysis
+
+      VersioningConfiguration:
+        Status: Enabled
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced

@@ -53,6 +53,10 @@ provider:
     ANALYSIS_TABLE_NAME:
       Ref: AnalisisTable
 
+    # ANALISIS HISTORICO - S3
+    ANALYSIS_BUCKET_NAME:
+      Ref: HistoricalAnalysisBucket  
+
     # INCIDENTES
     INCIDENTS_TABLE_NAME:
       Ref: IncidentesTable
