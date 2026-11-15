@@ -2,23 +2,26 @@
 """
 Lambda: ReservarRepuestos
 
-Tablas provisionales:
-
 t_repuestos:
-    PK: tenant_id
-    SK: part_id
+    PK tenant_id, SK part_id
 
 t_reservas_repuestos:
-    PK: tenant_id
-    SK: sk
+    PK tenant_id, SK sk
 
-La reserva descuenta stock disponible.
-Utiliza transacciones para evitar inconsistencias.
+Entrada:
+    incident_result
+    parts_result
+
+Salida:
+    reservation_result
+
+Reserva todos los repuestos atomicamente.
+Maximo 25 tipos de pieza por ejecucion.
 """
 
 import os
-import logging
 import hashlib
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -29,284 +32,345 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-dynamodb = boto3.resource("dynamodb")
+db = boto3.resource("dynamodb")
 client = boto3.client("dynamodb")
 serializer = TypeSerializer()
 
-PARTS_TABLE_NAME = os.environ.get(
-    "PARTS_TABLE_NAME",
-    "t_repuestos"
+PARTS_TABLE = os.environ.get(
+    "PARTS_TABLE_NAME", "t_repuestos"
 )
 
-RESERVATIONS_TABLE_NAME = os.environ.get(
+RESERVATIONS_TABLE = os.environ.get(
     "RESERVATIONS_TABLE_NAME",
     "t_reservas_repuestos"
 )
 
-parts_table = dynamodb.Table(PARTS_TABLE_NAME)
-reservations_table = dynamodb.Table(
-    RESERVATIONS_TABLE_NAME
-)
+parts_table = db.Table(PARTS_TABLE)
+reservations_table = db.Table(RESERVATIONS_TABLE)
 
 
-def serialize_item(item):
+def av(item):
     return {
         key: serializer.serialize(value)
         for key, value in item.items()
     }
 
 
-def validate_quantity(value):
-    if type(value) is not int or value <= 0:
-        raise ValueError(
-            "quantity debe ser un entero positivo"
+def reservation_key(tenant, incident, part):
+    return {
+        "tenant_id": tenant,
+        "sk": f"RES#{incident}#{part}"
+    }
+
+
+def previous_reservations(tenant, incident, requested):
+    existing = []
+
+    for part in requested:
+        key = reservation_key(
+            tenant, incident, part["part_id"]
         )
-    return value
+
+        item = reservations_table.get_item(
+            Key=key,
+            ConsistentRead=True
+        ).get("Item")
+
+        if item:
+            existing.append(item)
+
+    return existing
 
 
-def get_stock_status(quantity, minimum_stock):
-    if quantity <= 0:
-        return "out_of_stock"
-
-    if quantity <= minimum_stock:
-        return "low_stock"
-
-    return "available"
-
-
-def format_reservation(item, remaining_stock=None):
-    result = {
-        "tenant_id": item["tenant_id"],
+def format_reservation(item):
+    return {
         "reservation_id": item["reservation_id"],
-        "incident_id": item["incident_id"],
         "part_id": item["part_id"],
         "quantity": int(item["quantity"]),
         "reserved_at": item["reserved_at"],
         "status": item["status"]
     }
 
-    if remaining_stock is not None:
-        result["remaining_stock"] = remaining_stock
-
-    return result
-
 
 def lambda_handler(event, context):
-    try:
-        data = event.get("Payload", event)
+    tenant_id = event.get("tenant_id")
+    incident = event.get("incident_result") or {}
+    parts_result = event.get("parts_result") or {}
 
-        tenant_id = data.get("tenant_id")
-        incident_id = data.get("incident_id")
-        part_id = data.get("part_id")
-        quantity = validate_quantity(
-            data.get("quantity")
+    incident_id = incident.get("incident_id")
+
+    if not tenant_id or not incident_id:
+        raise ValueError("Falta tenant_id o incident_id")
+
+    if (
+        incident.get("tenant_id") != tenant_id
+        or parts_result.get("tenant_id") != tenant_id
+        or parts_result.get("incident_id") != incident_id
+    ):
+        raise ValueError("Contexto inconsistente")
+
+    if parts_result.get("status") == "no_parts_required":
+        return {
+            "tenant_id": tenant_id,
+            "incident_id": incident_id,
+            "reservations": [],
+            "all_reserved": True,
+            "status": "no_parts_required"
+        }
+
+    if parts_result.get("all_parts_available") is not True:
+        return {
+            "tenant_id": tenant_id,
+            "incident_id": incident_id,
+            "reservations": [],
+            "all_reserved": False,
+            "status": "insufficient_stock"
+        }
+
+    requested = parts_result.get("required_parts", [])
+
+    if not isinstance(requested, list) or not requested:
+        raise ValueError(
+            "No hay repuestos para reservar"
         )
 
-        if not all([tenant_id, incident_id, part_id]):
+    if len(requested) > 25:
+        raise ValueError(
+            "Maximo 25 repuestos por transaccion"
+        )
+
+    seen = set()
+
+    for part in requested:
+        if not isinstance(part, dict):
+            raise ValueError("Repuesto invalido")
+
+        part_id = part.get("part_id")
+        quantity = part.get("required_quantity")
+
+        if (
+            not isinstance(part_id, str)
+            or not part_id
+            or type(quantity) is not int
+            or quantity <= 0
+            or part_id in seen
+        ):
             raise ValueError(
-                "tenant_id, incident_id y part_id "
-                "son obligatorios"
+                "IDs duplicados o cantidades invalidas"
             )
 
-        # Identificador estable por incidente y repuesto
-        fingerprint = (
-            f"{tenant_id}|{incident_id}|{part_id}"
+        seen.add(part_id)
+
+    # Idempotencia: comprobar reservas anteriores
+    existing = previous_reservations(
+        tenant_id, incident_id, requested
+    )
+
+    if existing:
+        if len(existing) != len(requested):
+            raise RuntimeError(
+                "Existen reservas parciales anteriores"
+            )
+
+        expected = {
+            p["part_id"]: p["required_quantity"]
+            for p in requested
+        }
+
+        if any(
+            int(item["quantity"])
+                != expected.get(item["part_id"])
+            for item in existing
+        ):
+            raise ValueError(
+                "Las cantidades reservadas no coinciden"
+            )
+
+        if any(
+            item["status"] != "reserved"
+            for item in existing
+        ):
+            raise ValueError(
+                "La reserva existente ya cambio de estado"
+            )
+
+        return {
+            "tenant_id": tenant_id,
+            "incident_id": incident_id,
+            "reservations": [
+                format_reservation(item)
+                for item in existing
+            ],
+            "all_reserved": True,
+            "status": "reserved"
+        }
+
+    # Preparar transaccion
+    operations = []
+    reservations = []
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    for requested_part in requested:
+        part_id = requested_part["part_id"]
+        quantity = requested_part["required_quantity"]
+
+        stock_item = parts_table.get_item(
+            Key={
+                "tenant_id": tenant_id,
+                "part_id": part_id
+            },
+            ConsistentRead=True
+        ).get("Item")
+
+        if not stock_item:
+            return {
+                "tenant_id": tenant_id,
+                "incident_id": incident_id,
+                "reservations": [],
+                "all_reserved": False,
+                "status": "insufficient_stock"
+            }
+
+        current = int(stock_item.get("quantity", 0))
+        minimum = int(
+            stock_item.get("minimum_stock", 0)
         )
+
+        if current < quantity:
+            return {
+                "tenant_id": tenant_id,
+                "incident_id": incident_id,
+                "reservations": [],
+                "all_reserved": False,
+                "status": "insufficient_stock"
+            }
+
+        remaining = current - quantity
+
+        if remaining == 0:
+            stock_status = "out_of_stock"
+        elif remaining <= minimum:
+            stock_status = "low_stock"
+        else:
+            stock_status = "available"
 
         reservation_id = (
             "RES-"
             + hashlib.sha256(
-                fingerprint.encode("utf-8")
+                f"{tenant_id}|{incident_id}|{part_id}".encode()
             ).hexdigest()[:16].upper()
         )
 
-        reservation_key = {
-            "tenant_id": tenant_id,
-            "sk": f"RES#{incident_id}#{part_id}"
+        reservation = {
+            **reservation_key(
+                tenant_id, incident_id, part_id
+            ),
+            "reservation_id": reservation_id,
+            "incident_id": incident_id,
+            "part_id": part_id,
+            "quantity": quantity,
+            "reserved_at": now,
+            "status": "reserved"
         }
 
-        # Comprobar una reserva anterior
-        existing = reservations_table.get_item(
-            Key=reservation_key,
-            ConsistentRead=True
-        ).get("Item")
-
-        if existing:
-            if int(existing["quantity"]) != quantity:
-                raise ValueError(
-                    "Ya existe una reserva con otra cantidad"
-                )
-            return format_reservation(existing)
-
-        # Reintentar ante actualizaciones concurrentes
-        for attempt in range(3):
-
-            stock_response = parts_table.get_item(
-                Key={
+        # Operacion 1: descontar stock
+        operations.append({
+            "Update": {
+                "TableName": PARTS_TABLE,
+                "Key": av({
                     "tenant_id": tenant_id,
                     "part_id": part_id
+                }),
+                "UpdateExpression": (
+                    "SET #qty = :remaining, "
+                    "#status = :status"
+                ),
+                "ConditionExpression": (
+                    "attribute_exists(tenant_id) "
+                    "AND attribute_exists(part_id) "
+                    "AND #qty = :original"
+                ),
+                "ExpressionAttributeNames": {
+                    "#qty": "quantity",
+                    "#status": "status"
                 },
-                ConsistentRead=True
+                "ExpressionAttributeValues": av({
+                    ":remaining": remaining,
+                    ":original": current,
+                    ":status": stock_status
+                })
+            }
+        })
+
+        # Operacion 2: guardar reserva
+        operations.append({
+            "Put": {
+                "TableName": RESERVATIONS_TABLE,
+                "Item": av(reservation),
+                "ConditionExpression": (
+                    "attribute_not_exists(tenant_id) "
+                    "AND attribute_not_exists(sk)"
+                )
+            }
+        })
+
+        reservations.append(reservation)
+
+    # 2 acciones por repuesto, 50 en total como maximo
+    try:
+        client.transact_write_items(
+            TransactItems=operations
+        )
+
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != (
+            "TransactionCanceledException"
+        ):
+            raise
+
+        # Reintento de la misma transaccion
+        existing = previous_reservations(
+            tenant_id, incident_id, requested
+        )
+
+        if len(existing) == len(requested) and all(
+            item["status"] == "reserved"
+            and int(item["quantity"]) == next(
+                p["required_quantity"]
+                for p in requested
+                if p["part_id"] == item["part_id"]
             )
-
-            part = stock_response.get("Item")
-
-            if not part:
-                return {
-                    "tenant_id": tenant_id,
-                    "incident_id": incident_id,
-                    "part_id": part_id,
-                    "status": "part_not_found",
-                    "reserved": False
-                }
-
-            current_stock = int(
-                part.get("quantity", 0)
-            )
-
-            minimum_stock = int(
-                part.get("minimum_stock", 0)
-            )
-
-            # Sin stock suficiente
-            if current_stock < quantity:
-                return {
-                    "tenant_id": tenant_id,
-                    "incident_id": incident_id,
-                    "part_id": part_id,
-                    "required_quantity": quantity,
-                    "available_quantity": current_stock,
-                    "status": "insufficient_stock",
-                    "reserved": False
-                }
-
-            remaining_stock = current_stock - quantity
-
-            new_status = get_stock_status(
-                remaining_stock,
-                minimum_stock
-            )
-
-            reserved_at = datetime.now(
-                timezone.utc
-            ).isoformat()
-
-            reservation_item = {
-                **reservation_key,
-                "reservation_id": reservation_id,
+            for item in existing
+        ):
+            return {
+                "tenant_id": tenant_id,
                 "incident_id": incident_id,
-                "part_id": part_id,
-                "quantity": quantity,
-                "reserved_at": reserved_at,
+                "reservations": [
+                    format_reservation(item)
+                    for item in existing
+                ],
+                "all_reserved": True,
                 "status": "reserved"
             }
 
-            try:
-                # Descontar stock y crear reserva
-                # como una única operación atómica.
-                client.transact_write_items(
-                    TransactItems=[
-                        {
-                            "Update": {
-                                "TableName": PARTS_TABLE_NAME,
-                                "Key": serialize_item({
-                                    "tenant_id": tenant_id,
-                                    "part_id": part_id
-                                }),
-                                "UpdateExpression": (
-                                    "SET #qty = :remaining, "
-                                    "#status = :new_status"
-                                ),
-                                "ConditionExpression": (
-                                    "attribute_exists(tenant_id) "
-                                    "AND attribute_exists(part_id) "
-                                    "AND #qty = :original"
-                                ),
-                                "ExpressionAttributeNames": {
-                                    "#qty": "quantity",
-                                    "#status": "status"
-                                },
-                                "ExpressionAttributeValues": (
-                                    serialize_item({
-                                        ":remaining": remaining_stock,
-                                        ":new_status": new_status,
-                                        ":original": current_stock
-                                    })
-                                )
-                            }
-                        },
-                        {
-                            "Put": {
-                                "TableName": (
-                                    RESERVATIONS_TABLE_NAME
-                                ),
-                                "Item": serialize_item(
-                                    reservation_item
-                                ),
-                                "ConditionExpression": (
-                                    "attribute_not_exists(tenant_id) "
-                                    "AND attribute_not_exists(sk)"
-                                )
-                            }
-                        }
-                    ]
-                )
+        # Conflicto concurrente: volver a consultar stock
+        # mediante una nueva ejecución.
+        return {
+            "tenant_id": tenant_id,
+            "incident_id": incident_id,
+            "reservations": [],
+            "all_reserved": False,
+            "status": "reservation_conflict"
+        }
 
-                logger.info(
-                    "Reserva %s creada correctamente",
-                    reservation_id
-                )
-
-                return {
-                    **format_reservation(
-                        reservation_item,
-                        remaining_stock
-                    ),
-                    "reserved": True,
-                    "stock_status": new_status
-                }
-
-            except ClientError as exc:
-                code = exc.response.get(
-                    "Error", {}
-                ).get("Code")
-
-                if code != "TransactionCanceledException":
-                    raise
-
-                # Si otro intento ya creó la reserva,
-                # devolver esa misma reserva.
-                existing = reservations_table.get_item(
-                    Key=reservation_key,
-                    ConsistentRead=True
-                ).get("Item")
-
-                if existing:
-                    if int(existing["quantity"]) != quantity:
-                        raise ValueError(
-                            "Reserva existente con otra cantidad"
-                        )
-                    return format_reservation(existing)
-
-                reasons = exc.response.get(
-                    "CancellationReasons", []
-                )
-
-                # Solo reintentar ante conflicto de stock.
-                if reasons and reasons[0].get(
-                    "Code"
-                ) == "ConditionalCheckFailed":
-                    continue
-
-                raise
-
-        raise RuntimeError(
-            "No se pudo reservar por cambios concurrentes "
-            "en el inventario"
-        )
-
-    except Exception:
-        logger.exception(
-            "Error reservando repuestos"
-        )
-        raise
+    return {
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "reservations": [
+            format_reservation(item)
+            for item in reservations
+        ],
+        "all_reserved": True,
+        "status": "reserved"
+    }

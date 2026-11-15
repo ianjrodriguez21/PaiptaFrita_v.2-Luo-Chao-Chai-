@@ -1,141 +1,283 @@
-import json
-import os
-import uuid
-from datetime import datetime, timezone
-from decimal import Decimal
-import boto3
 
-# Clientes AWS
-sagemaker_runtime = boto3.client("sagemaker-runtime")
+"""
+Lambda: DetectarAnomalias
+
+Entrada: contexto de Step Functions con machine_data
+Salida: resultado de detección de anomalías
+
+Tabla DynamoDB:
+t_anomalias
+    PK: tenant_id
+    SK: sk
+
+GSI para DetectarPatrones:
+    tenant-timestamp-index
+    PK: tenant_id
+    SK: timestamp
+"""
+
+import os
+import json
+import math
+import logging
+import hashlib
+from decimal import Decimal
+from datetime import datetime, timezone
+
+import boto3
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+sagemaker = boto3.client("sagemaker-runtime")
 dynamodb = boto3.resource("dynamodb")
 
-# Variables de entorno (alineadas con diagrama: t_anomalias)
-ENDPOINT_NAME = os.environ["SAGEMAKER_ENDPOINT"]
-ALERTS_TABLE_NAME = os.environ.get("ALERTS_TABLE_NAME", "t_anomalias")
+SAGEMAKER_ENDPOINT = os.environ["SAGEMAKER_ENDPOINT"]
+
+ALERTS_TABLE_NAME = os.environ.get(
+    "ALERTS_TABLE_NAME",
+    "t_anomalias"
+)
+
+table = dynamodb.Table(ALERTS_TABLE_NAME)
+
+THRESHOLDS = {
+    "temperature": 95.0,
+    "vibration": 7.0,
+    "pressure": 200.0,
+    "fuel_consumption": 30.0
+}
 
 
-def evaluate_anomalous_variables(telemetry, anomaly_score):
-    """Identifica qué variables específicas superan umbrales operativos."""
-    thresholds = {
-        "temperature": 95.0,
-        "vibration": 7.0,
-        "pressure": 200.0,
-        "fuel_consumption": 30.0
-    }
-    detected = []
-    score = round(abs(float(anomaly_score)), 4)
+def normalize_timestamp(value):
+    if not isinstance(value, str):
+        raise ValueError("timestamp es obligatorio")
 
-    for var, limit in thresholds.items():
-        val = telemetry.get(var)
-        if val is not None and float(val) > limit:
-            detected.append({
-                "variable": var,
-                "value": float(val),
+    dt = datetime.fromisoformat(
+        value.replace("Z", "+00:00")
+    )
+
+    if dt.tzinfo is None:
+        raise ValueError(
+            "timestamp necesita zona horaria"
+        )
+
+    return dt.astimezone(
+        timezone.utc
+    ).isoformat(
+        timespec="microseconds"
+    ).replace("+00:00", "Z")
+
+
+def get_number(data, field):
+    value = data.get(field)
+
+    if value is None or isinstance(value, bool):
+        raise ValueError(
+            f"Campo numérico obligatorio: {field}"
+        )
+
+    number = float(value)
+
+    if not math.isfinite(number):
+        raise ValueError(
+            f"Valor inválido para {field}"
+        )
+
+    return number
+
+
+def identify_anomalies(telemetry, score):
+    """Identifica variables que exceden umbrales."""
+
+    anomalies = []
+
+    for variable, threshold in THRESHOLDS.items():
+        value = telemetry.get(variable)
+
+        if value is None:
+            continue
+
+        value = get_number(telemetry, variable)
+
+        if value > threshold:
+            anomalies.append({
+                "variable": variable,
+                "value": value,
                 "anomaly_score": score
             })
 
-    # Si SageMaker detectó anomalía multivariable pero ninguna superó el umbral individual
-    if not detected:
-        detected.append({
+    if not anomalies:
+        anomalies.append({
             "variable": "multivariate_behavior",
-            "value": float(telemetry.get("temperature", 0)),
+            "value": None,
             "anomaly_score": score
         })
 
-    return detected
+    return anomalies
 
 
 def lambda_handler(event, context):
     try:
-        # [CORREGIDO]: Soporta invocación por API Gateway (body), Step Functions anidado (telemetry) o JSON directo
-        if isinstance(event.get("body"), str):
-            telemetry = json.loads(event["body"])
-        elif isinstance(event.get("body"), dict):
-            telemetry = event["body"]
-        elif isinstance(event.get("telemetry"), dict):
-            telemetry = event["telemetry"]
-        else:
-            telemetry = event
+        # 1. Leer contexto de Step Functions
+        telemetry = event.get("machine_data")
 
-        tenant_id = telemetry.get("tenant_id") or event.get("tenant_id")
-        machine_id = telemetry.get("machine_id") or event.get("machine_id")
+        if not isinstance(telemetry, dict):
+            raise ValueError(
+                "machine_data es obligatorio"
+            )
+
+        tenant_id = event.get("tenant_id")
+        machine_id = event.get("machine_id")
 
         if not tenant_id or not machine_id:
-            raise ValueError("Falta tenant_id o machine_id")
+            raise ValueError(
+                "tenant_id y machine_id son obligatorios"
+            )
 
-        # Extraer variables para SageMaker (modelo de anomalías)
+        if (
+            telemetry.get("tenant_id") != tenant_id
+            or telemetry.get("machine_id") != machine_id
+        ):
+            raise ValueError(
+                "machine_data no coincide con el contexto"
+            )
+
+        timestamp = normalize_timestamp(
+            event.get("timestamp")
+        )
+
+        # 2. Preparar variables para el modelo ML
         features = [
-            float(telemetry.get("temperature", 0)),
-            float(telemetry.get("vibration", 0)),
-            float(telemetry.get("pressure", 0))
+            get_number(telemetry, "temperature"),
+            get_number(telemetry, "vibration"),
+            get_number(telemetry, "pressure")
         ]
 
-        payload = {"features": features}
+        payload = {
+            "features": features
+        }
 
-        response = sagemaker_runtime.invoke_endpoint(
-            EndpointName=ENDPOINT_NAME,
+        # 3. Invocar SageMaker
+        response = sagemaker.invoke_endpoint(
+            EndpointName=SAGEMAKER_ENDPOINT,
             ContentType="application/json",
             Accept="application/json",
             Body=json.dumps(payload)
         )
 
-        prediction = json.loads(response["Body"].read().decode("utf-8"))
+        prediction = json.loads(
+            response["Body"].read().decode("utf-8")
+        )
 
-        # El modelo devuelve: -1 = Anomalía, 1 = Normal
-        is_anomaly = prediction.get("prediction") == -1
-        anomaly_score = prediction.get("anomaly_score", 0.0)
+        predicted_class = prediction.get("prediction")
 
-        timestamp = telemetry.get("timestamp", datetime.now(timezone.utc).isoformat())
+        if (
+            type(predicted_class) is not int
+            or predicted_class not in (-1, 1)
+        ):
+            raise ValueError(
+                "SageMaker debe devolver prediction -1 o 1"
+            )
 
-        # Construir salida según contrato del PDF
-        anomalies = evaluate_anomalous_variables(telemetry, anomaly_score) if is_anomaly else []
+        is_anomaly = predicted_class == -1
 
-        # Registrar anomalía en DynamoDB (t_anomalias) si corresponde
+        raw_score = float(
+            prediction.get("anomaly_score", 0.0)
+        )
+
+        if not math.isfinite(raw_score):
+            raise ValueError(
+                "anomaly_score inválido"
+            )
+
+        # Se conserva la magnitud del score.
+        # No se asume que sea una probabilidad.
+        anomaly_score = round(
+            abs(raw_score), 4
+        )
+
+        anomalies = (
+            identify_anomalies(
+                telemetry, anomaly_score
+            )
+            if is_anomaly else []
+        )
+
+        alert_id = None
+
+        # 4. Persistir anomalía
         if is_anomaly:
-            table = dynamodb.Table(ALERTS_TABLE_NAME)
-            machine_ts = f"{machine_id}#{timestamp}"
+            fingerprint = (
+                f"{tenant_id}|{machine_id}|{timestamp}"
+            )
 
-            # Mantiene 'sk' y 'machine_timestamp' para soportar los GSI de DetectarPatrones y AnalisisHistorico
+            alert_id = (
+                "ALT-"
+                + hashlib.sha256(
+                    fingerprint.encode("utf-8")
+                ).hexdigest()[:16].upper()
+            )
+
+            machine_timestamp = (
+                f"{machine_id}#{timestamp}"
+            )
+
             alert = {
                 "tenant_id": tenant_id,
-                "sk": machine_ts,
-                "machine_timestamp": machine_ts,
-                "alert_id": str(uuid.uuid4()),
+                "sk": machine_timestamp,
+                "machine_timestamp": machine_timestamp,
+                "alert_id": alert_id,
                 "machine_id": machine_id,
                 "timestamp": timestamp,
                 "tipo": "ANOMALIA_DETECTADA",
-                "telemetria": json.loads(json.dumps(telemetry), parse_float=Decimal),
-                "anomalies": json.loads(json.dumps(anomalies), parse_float=Decimal)
+                "telemetria": json.loads(
+                    json.dumps(telemetry),
+                    parse_float=Decimal
+                ),
+                "anomalies": json.loads(
+                    json.dumps(anomalies),
+                    parse_float=Decimal
+                )
             }
-            table.put_item(Item=alert)
 
-        # [CORREGIDO]: Preserva los metadatos originales de la máquina (operating_hours, machine_type, etc.)
-        # para que RecomendarMantenimiento no pierda esos datos si Step Functions encadena sin ResultPath
-        machine_data = {
-            "tenant_id": tenant_id,
-            "machine_id": machine_id,
-            "machine_type": telemetry.get("machine_type", "unknown"),
-            "operating_hours": telemetry.get("operating_hours", 0),
-            "operating_hours_since_last_maintenance": telemetry.get(
-                "operating_hours_since_last_maintenance",
-                telemetry.get("operating_hours", 0)
-            ),
-            "latitude": telemetry.get("latitude"),
-            "longitude": telemetry.get("longitude"),
-            "zone": telemetry.get("zone") or telemetry.get("affected_zone", "ZONE-A")
-        }
+            try:
+                table.put_item(
+                    Item=alert,
+                    ConditionExpression=(
+                        "attribute_not_exists(tenant_id) "
+                        "AND attribute_not_exists(sk)"
+                    )
+                )
 
-        salida = {
+            except ClientError as exc:
+                code = exc.response.get(
+                    "Error", {}
+                ).get("Code")
+
+                if code != "ConditionalCheckFailedException":
+                    raise
+
+                # Ya se registró esta anomalía.
+                logger.info(
+                    "Anomalía ya registrada: %s",
+                    alert_id
+                )
+
+        # 5. Salida exclusiva de esta Lambda
+        return {
             "tenant_id": tenant_id,
             "machine_id": machine_id,
             "timestamp": timestamp,
             "anomaly_detected": is_anomaly,
-            "anomalies": anomalies,
-            "machine_data": machine_data
+            "anomaly_score": anomaly_score,
+            "alert_id": alert_id,
+            "anomalies": anomalies
         }
 
-        return salida
-
-    except Exception as e:
-        print(f"Error detectando anomalias: {str(e)}")
-        raise e
+    except Exception:
+        logger.exception(
+            "Error detectando anomalías"
+        )
+        raise

@@ -2,13 +2,18 @@
 """
 Lambda: BuscarRepuestos
 
-Tabla provisional:
-t_repuestos
-    PK: tenant_id
-    SK: part_id
+Tabla: t_repuestos
+PK: tenant_id
+SK: part_id
 
-Busca repuestos y comprueba su disponibilidad.
-No modifica el inventario.
+Entrada:
+    incident_result
+    required_parts
+
+Salida:
+    parts_result
+
+No reserva ni descuenta stock.
 """
 
 import os
@@ -16,189 +21,164 @@ import logging
 from decimal import Decimal
 
 import boto3
-from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-dynamodb = boto3.resource("dynamodb")
+db = boto3.resource("dynamodb")
 
-PARTS_TABLE_NAME = os.environ.get(
-    "PARTS_TABLE_NAME",
-    "t_repuestos"
+TABLE_NAME = os.environ.get(
+    "PARTS_TABLE_NAME", "t_repuestos"
 )
 
-table = dynamodb.Table(PARTS_TABLE_NAME)
+table = db.Table(TABLE_NAME)
 
 
-def validate_quantity(value):
-    """Verifica que una cantidad sea entera y positiva."""
+def positive_integer(value):
     if isinstance(value, bool):
-        raise ValueError("La cantidad debe ser un entero positivo")
+        raise ValueError("Cantidad invalida")
 
     try:
-        quantity = Decimal(str(value))
+        n = Decimal(str(value))
     except Exception as exc:
-        raise ValueError("Cantidad inválida") from exc
+        raise ValueError("Cantidad invalida") from exc
 
     if (
-        not quantity.is_finite()
-        or quantity != quantity.to_integral_value()
-        or quantity <= 0
+        not n.is_finite()
+        or n <= 0
+        or n != n.to_integral_value()
     ):
-        raise ValueError("La cantidad debe ser un entero positivo")
+        raise ValueError(
+            "Cantidad debe ser entero positivo"
+        )
 
-    return int(quantity)
+    return int(n)
 
 
 def lambda_handler(event, context):
-    try:
-        data = event.get("Payload", event)
+    tenant_id = event.get("tenant_id")
+    incident = event.get("incident_result") or {}
 
-        tenant_id = data.get("tenant_id")
-        incident_id = data.get("incident_id")
+    incident_id = incident.get("incident_id")
 
-        required_parts = data.get("required_parts")
+    if not tenant_id or not incident_id:
+        raise ValueError("Falta tenant_id o incident_id")
 
-        if not tenant_id or not incident_id:
-            raise ValueError(
-                "tenant_id e incident_id son obligatorios"
-            )
+    if incident.get("tenant_id") != tenant_id:
+        raise ValueError("Tenant del incidente no coincide")
 
-        if not isinstance(required_parts, list):
-            raise ValueError(
-                "required_parts debe ser una lista"
-            )
+    required_parts = event.get("required_parts")
 
-        if not required_parts:
-            return {
-                "tenant_id": tenant_id,
-                "incident_id": incident_id,
-                "required_parts": [],
-                "all_parts_available": True,
-                "missing_parts": [],
-                "status": "no_parts_required"
-            }
-
-        # Unificar repuestos repetidos en la solicitud
-        consolidated = {}
-
-        for part in required_parts:
-            if not isinstance(part, dict):
-                raise ValueError(
-                    "Cada repuesto debe ser un objeto JSON"
-                )
-
-            part_id = part.get("part_id")
-
-            if not isinstance(part_id, str) or not part_id:
-                raise ValueError(
-                    "Cada repuesto necesita part_id"
-                )
-
-            quantity = validate_quantity(
-                part.get("quantity", part.get("required_quantity"))
-            )
-
-            consolidated[part_id] = (
-                consolidated.get(part_id, 0) + quantity
-            )
-
-        results = []
-        missing_parts = []
-
-        for part_id, required_quantity in consolidated.items():
-
-            response = table.get_item(
-                Key={
-                    "tenant_id": tenant_id,
-                    "part_id": part_id
-                },
-                ConsistentRead=True
-            )
-
-            part = response.get("Item")
-
-            if part is None:
-                result = {
-                    "part_id": part_id,
-                    "name": None,
-                    "required_quantity": required_quantity,
-                    "available_quantity": 0,
-                    "warehouse_location": None,
-                    "available": False
-                }
-
-            else:
-                available_quantity = int(
-                    part.get("quantity", 0)
-                )
-
-                available_quantity = max(
-                    0, available_quantity
-                )
-
-                stock_available = (
-                    part.get("status") == "available"
-                    and available_quantity >= required_quantity
-                )
-
-                result = {
-                    "part_id": part_id,
-                    "name": part.get("name"),
-                    "required_quantity": required_quantity,
-                    "available_quantity": available_quantity,
-                    "warehouse_location": part.get(
-                        "warehouse_location"
-                    ),
-                    "available": stock_available
-                }
-
-            results.append(result)
-
-            if not result["available"]:
-                missing_parts.append({
-                    "part_id": part_id,
-                    "required_quantity": required_quantity,
-                    "available_quantity": result[
-                        "available_quantity"
-                    ],
-                    "shortage": max(
-                        0,
-                        required_quantity
-                        - result["available_quantity"]
-                    )
-                })
-
-        all_available = len(missing_parts) == 0
-
-        result = {
+    if required_parts is None:
+        return {
             "tenant_id": tenant_id,
             "incident_id": incident_id,
-            "required_parts": results,
-            "all_parts_available": all_available,
-            "missing_parts": missing_parts,
-            "status": (
-                "available"
-                if all_available
-                else "insufficient_stock"
-            )
+            "required_parts": [],
+            "missing_parts": [],
+            "all_parts_available": False,
+            "status": "parts_not_defined"
         }
 
-        logger.info(
-            "Consulta de repuestos para incidente %s: %s",
-            incident_id,
-            result["status"]
+    if not isinstance(required_parts, list):
+        raise ValueError("required_parts debe ser lista")
+
+    if not required_parts:
+        return {
+            "tenant_id": tenant_id,
+            "incident_id": incident_id,
+            "required_parts": [],
+            "missing_parts": [],
+            "all_parts_available": True,
+            "status": "no_parts_required"
+        }
+
+    # Consolidar IDs repetidos
+    consolidated = {}
+
+    for part in required_parts:
+        if not isinstance(part, dict):
+            raise ValueError("Repuesto invalido")
+
+        part_id = part.get("part_id")
+        quantity = positive_integer(
+            part.get(
+                "quantity",
+                part.get("required_quantity")
+            )
         )
 
-        return result
+        if not isinstance(part_id, str) or not part_id:
+            raise ValueError("part_id obligatorio")
 
-    except ClientError:
-        logger.exception(
-            "Error de DynamoDB buscando repuestos"
+        consolidated[part_id] = (
+            consolidated.get(part_id, 0)
+            + quantity
         )
-        raise
 
-    except Exception:
-        logger.exception("Error buscando repuestos")
-        raise
+    results = []
+    missing = []
+
+    for part_id, quantity in consolidated.items():
+        item = table.get_item(
+            Key={
+                "tenant_id": tenant_id,
+                "part_id": part_id
+            },
+            ConsistentRead=True
+        ).get("Item")
+
+        available_quantity = (
+            int(item.get("quantity", 0))
+            if item else 0
+        )
+
+        available_quantity = max(
+            0, available_quantity
+        )
+
+        # low_stock también puede utilizarse
+        # si todavía hay cantidad suficiente.
+        available = (
+            item is not None
+            and item.get("status") != "out_of_stock"
+            and available_quantity >= quantity
+        )
+
+        result = {
+            "part_id": part_id,
+            "name": item.get("name") if item else None,
+            "required_quantity": quantity,
+            "available_quantity": available_quantity,
+            "warehouse_location": (
+                item.get("warehouse_location")
+                if item else None
+            ),
+            "available": available
+        }
+
+        results.append(result)
+
+        if not available:
+            missing.append({
+                "part_id": part_id,
+                "required_quantity": quantity,
+                "available_quantity": available_quantity,
+                "shortage": max(
+                    0, quantity - available_quantity
+                )
+            })
+
+    all_available = not missing
+
+    return {
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "required_parts": results,
+        "missing_parts": missing,
+        "all_parts_available": all_available,
+        "status": (
+            "available"
+            if all_available
+            else "insufficient_stock"
+        )
+    }

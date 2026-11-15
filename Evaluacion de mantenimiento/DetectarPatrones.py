@@ -1,179 +1,487 @@
-import json
+
+"""
+Lambda: DetectarPatrones
+
+Entrada:
+    Contexto de Step Functions
+    anomaly_result
+
+Salida:
+    pattern_result
+
+Tabla de lectura:
+    t_anomalias
+    PK: tenant_id
+    SK: sk
+
+GSI requerido:
+    tenant-timestamp-index
+    PK: tenant_id
+    SK: timestamp
+
+Tabla de escritura:
+    t_patrones
+    PK: tenant_id
+    SK: sk
+"""
+
 import os
-import uuid
+import json
+import math
+import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
-# Clientes AWS
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 dynamodb = boto3.resource("dynamodb")
 sagemaker = boto3.client("sagemaker-runtime")
 
-# [CORREGIDO]: Nombre de tabla alineado con el diagrama oscuro ("t_patrones"), configurable por env var
-ALERTS_TABLE_NAME = os.environ.get("ALERTS_TABLE_NAME", "t_anomalias")
-PATTERNS_TABLE_NAME = os.environ.get("PATTERNS_TABLE_NAME", "t_patrones")
-SAGEMAKER_ENDPOINT = os.environ["SAGEMAKER_ENDPOINT"]
+ALERTS_TABLE_NAME = os.environ.get(
+    "ALERTS_TABLE_NAME",
+    "t_anomalias"
+)
+
+PATTERNS_TABLE_NAME = os.environ.get(
+    "PATTERNS_TABLE_NAME",
+    "t_patrones"
+)
+
+PATTERNS_ENDPOINT = os.environ[
+    "SAGEMAKER_PATTERNS_ENDPOINT"
+]
+
+INDEX_NAME = os.environ.get(
+    "ALERTS_TIME_INDEX",
+    "tenant-timestamp-index"
+)
 
 alerts_table = dynamodb.Table(ALERTS_TABLE_NAME)
 patterns_table = dynamodb.Table(PATTERNS_TABLE_NAME)
 
-# GSI usado para consultar anomalías recientes por tenant y rango de tiempo
-INDEX_NAME = "tenant-timestamp-index"
+
+def normalize_timestamp(value):
+    if not isinstance(value, str):
+        raise ValueError("timestamp obligatorio")
+
+    dt = datetime.fromisoformat(
+        value.replace("Z", "+00:00")
+    )
+
+    if dt.tzinfo is None:
+        raise ValueError(
+            "timestamp debe incluir zona horaria"
+        )
+
+    return dt.astimezone(
+        timezone.utc
+    ).isoformat(
+        timespec="microseconds"
+    ).replace("+00:00", "Z")
+
+
+def parse_timestamp(value):
+    return datetime.fromisoformat(
+        normalize_timestamp(value).replace(
+            "Z", "+00:00"
+        )
+    )
+
+
+def query_recent_anomalies(
+    tenant_id, start_time, end_time
+):
+    """Consulta anomalías por tenant e intervalo."""
+
+    records = []
+    last_key = None
+
+    while True:
+        params = {
+            "IndexName": INDEX_NAME,
+            "KeyConditionExpression": (
+                Key("tenant_id").eq(tenant_id)
+                & Key("timestamp").between(
+                    start_time, end_time
+                )
+            )
+        }
+
+        if last_key:
+            params["ExclusiveStartKey"] = last_key
+
+        response = alerts_table.query(**params)
+
+        records.extend(
+            response.get("Items", [])
+        )
+
+        last_key = response.get(
+            "LastEvaluatedKey"
+        )
+
+        if not last_key:
+            break
+
+    return records
+
+
+def build_instances(alerts):
+    """Construye observaciones para SageMaker."""
+
+    instances = []
+
+    for alert in alerts:
+        telemetry = alert.get(
+            "telemetria", {}
+        )
+
+        fields = [
+            "temperature",
+            "vibration",
+            "pressure"
+        ]
+
+        if any(
+            telemetry.get(field) is None
+            for field in fields
+        ):
+            continue
+
+        try:
+            features = [
+                float(telemetry[field])
+                for field in fields
+            ]
+
+            fuel = telemetry.get(
+                "fuel_consumption", 0
+            )
+
+            features.append(
+                float(fuel if fuel is not None else 0)
+            )
+
+            if not all(
+                math.isfinite(value)
+                for value in features
+            ):
+                continue
+
+        except (ValueError, TypeError):
+            continue
+
+        instances.append({
+            "machine_id": alert.get("machine_id"),
+            "alert_id": alert.get("alert_id"),
+            "timestamp": alert.get("timestamp"),
+            "features": features
+        })
+
+    return instances
+
+
+def invoke_clustering_model(instances):
+    """Invoca modelo de clustering en SageMaker."""
+
+    response = sagemaker.invoke_endpoint(
+        EndpointName=PATTERNS_ENDPOINT,
+        ContentType="application/json",
+        Accept="application/json",
+        Body=json.dumps({
+            "instances": instances
+        })
+    )
+
+    result = json.loads(
+        response["Body"].read().decode("utf-8")
+    )
+
+    assignments = result.get("assignments")
+
+    if not isinstance(assignments, list):
+        raise ValueError(
+            "SageMaker debe devolver assignments"
+        )
+
+    # Normalizar las asignaciones devueltas
+    valid_ids = {
+        item["alert_id"]: item["machine_id"]
+        for item in instances
+        if item.get("alert_id")
+        and item.get("machine_id")
+    }
+
+    normalized = []
+
+    for assignment in assignments:
+        if not isinstance(assignment, dict):
+            raise ValueError(
+                "Asignación de clustering inválida"
+            )
+
+        alert_id = assignment.get("alert_id")
+        machine_id = assignment.get("machine_id")
+        cluster_id = assignment.get("cluster_id")
+
+        if (
+            alert_id not in valid_ids
+            or valid_ids[alert_id] != machine_id
+        ):
+            raise ValueError(
+                "SageMaker devolvió una alerta desconocida"
+            )
+
+        if type(cluster_id) is not int:
+            raise ValueError(
+                "cluster_id debe ser entero"
+            )
+
+        normalized.append({
+            "alert_id": alert_id,
+            "machine_id": machine_id,
+            "cluster_id": cluster_id
+        })
+
+    return normalized
 
 
 def lambda_handler(event, context):
     try:
+        # 1. Leer contexto
         tenant_id = event.get("tenant_id")
-        current_machine_id = event.get("machine_id")
+        machine_id = event.get("machine_id")
 
-        if not tenant_id or not current_machine_id:
-            raise ValueError("Falta tenant_id o machine_id en el payload")
+        machine_data = event.get(
+            "machine_data", {}
+        )
 
-        analysis_window_minutes = int(event.get("analysis_window_minutes", 15))
+        anomaly_result = event.get(
+            "anomaly_result", {}
+        )
 
-        # Calcular ventana de tiempo
-        end_time = datetime.now(timezone.utc)
-        start_time = end_time - timedelta(minutes=analysis_window_minutes)
-        start_timestamp = start_time.isoformat()
-        end_timestamp = end_time.isoformat()
-
-        # Consultar anomalías recientes en DynamoDB
-        anomalies = []
-        last_key = None
-
-        while True:
-            query_params = {
-                "IndexName": INDEX_NAME,
-                "KeyConditionExpression": (
-                    Key("tenant_id").eq(tenant_id)
-                    & Key("timestamp").between(start_timestamp, end_timestamp)
-                )
-            }
-            if last_key:
-                query_params["ExclusiveStartKey"] = last_key
-
-            response = alerts_table.query(**query_params)
-            anomalies.extend(response.get("Items", []))
-            last_key = response.get("LastEvaluatedKey")
-
-            if not last_key:
-                break
-
-        # Preparar observaciones para SageMaker (modelo de clustering)
-        instances = []
-        for alert in anomalies:
-            telemetry = alert.get("telemetria", {})
-            core_features = [
-                telemetry.get("temperature"),
-                telemetry.get("vibration"),
-                telemetry.get("pressure")
-            ]
-
-            if any(value is None for value in core_features):
-                continue
-
-            # [CORREGIDO]: Si fuel_consumption no viene en algún registro antiguo, usa 0.0 en vez de descartar la alerta
-            fuel = telemetry.get("fuel_consumption", 0.0)
-            features = [float(v) for v in core_features] + [float(fuel if fuel is not None else 0.0)]
-
-            instances.append({
-                "tenant_id": tenant_id,
-                "machine_id": alert.get("machine_id"),
-                "alert_id": alert.get("alert_id"),
-                "timestamp": alert.get("timestamp"),
-                "features": features
-            })
-
-        # [CORREGIDO]: Variables alineadas con el contrato del PDF (incluye affected_machines, affected_zone y confidence)
-        pattern_detected = False
-        pattern_type = None
-        affected_machines = []
-        machine_data = event.get("machine_data", {})
-        affected_zone = event.get("affected_zone") or machine_data.get("zone", "ZONE-A")
-        confidence = 0.0
-
-        # Si hay suficientes observaciones, enviamos a SageMaker
-        if len(instances) >= 2:
-            payload = {"instances": instances}
-
-            ml_response = sagemaker.invoke_endpoint(
-                EndpointName=SAGEMAKER_ENDPOINT,
-                ContentType="application/json",
-                Body=json.dumps(payload)
+        if not tenant_id or not machine_id:
+            raise ValueError(
+                "tenant_id y machine_id son obligatorios"
             )
 
-            result = json.loads(ml_response["Body"].read().decode("utf-8"))
-            assignments = result.get("assignments", [])
+        if not isinstance(anomaly_result, dict):
+            raise ValueError(
+                "anomaly_result debe ser un objeto"
+            )
 
-            # Agrupar máquinas por clúster
-            clusters = {}
-            for assignment in assignments:
-                cluster_id = assignment.get("cluster_id")
-                if cluster_id == -1:
-                    continue
-                clusters.setdefault(cluster_id, []).append(assignment)
+        timestamp = normalize_timestamp(
+            event.get("timestamp")
+        )
 
-            # Filtrar clústeres reales y guardar en DynamoDB (t_patrones)
-            for cluster_id, members in clusters.items():
-                machine_ids = sorted(list(set(item["machine_id"] for item in members)))
+        # Ventana de análisis centrada en el evento
+        window_minutes = int(
+            event.get("analysis_window_minutes", 15)
+        )
 
-                if len(machine_ids) >= 2:
-                    pattern_id = str(uuid.uuid4())
-                    # [CORREGIDO]: Cálculo dinámico de confianza según máquinas en el clúster (antes faltaba y caía en 0.60)
-                    cluster_confidence = min(0.99, round(0.70 + 0.05 * len(machine_ids), 2))
+        if not 1 <= window_minutes <= 1440:
+            raise ValueError(
+                "analysis_window_minutes fuera de rango"
+            )
 
-                    pattern = {
-                        "tenant_id": tenant_id,
-                        "sk": pattern_id,
-                        "pattern_id": pattern_id,
-                        "cluster_id": int(cluster_id),
-                        "pattern_type": "SHARED_ANOMALOUS_BEHAVIOR",
-                        "machine_ids": machine_ids,
-                        "affected_zone": affected_zone,
-                        "confidence": str(cluster_confidence),
-                        "alert_ids": [item["alert_id"] for item in members],
-                        "machines_affected": len(machine_ids),
-                        "start_time": start_timestamp,
-                        "end_time": end_timestamp,
-                        "detected_at": datetime.now(timezone.utc).isoformat()
-                    }
-                    patterns_table.put_item(Item=pattern)
+        end_dt = parse_timestamp(timestamp)
+        start_dt = end_dt - timedelta(
+            minutes=window_minutes
+        )
 
-                    if current_machine_id in machine_ids:
-                        pattern_detected = True
-                        pattern_type = "shared_anomalous_behavior"
-                        affected_machines = machine_ids
-                        confidence = cluster_confidence
+        start_timestamp = start_dt.isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z")
 
-        pattern_result = {
+        affected_zone = (
+            machine_data.get("zone")
+            or machine_data.get("affected_zone")
+        )
+
+        result = {
             "tenant_id": tenant_id,
-            "machine_id": current_machine_id,
-            "pattern_detected": pattern_detected,
-            "pattern_type": pattern_type,
-            "affected_machines": affected_machines,
+            "machine_id": machine_id,
+            "timestamp": timestamp,
+            "pattern_detected": False,
+            "pattern_type": None,
+            "affected_machines": [],
             "affected_zone": affected_zone,
-            "confidence": confidence
+            "confidence": 0.0
         }
 
-        # [CORREGIDO]: Preserva anomaly_result completo (incluyendo lista 'anomalies') y machine_data
-        # para evitar pérdida de contexto en Step Functions
-        anomaly_result = event.get("anomaly_result") or {
-            "tenant_id": tenant_id,
-            "machine_id": current_machine_id,
-            "timestamp": event.get("timestamp"),
-            "anomaly_detected": event.get("anomaly_detected", False),
-            "anomalies": event.get("anomalies", [])
+        # 2. Consultar anomalías
+        alerts = query_recent_anomalies(
+            tenant_id,
+            start_timestamp,
+            timestamp
+        )
+
+        # Incluir anomalía actual si el GSI aún
+        # no refleja su escritura reciente.
+        if anomaly_result.get("anomaly_detected"):
+            current_alert_id = anomaly_result.get(
+                "alert_id"
+            )
+
+            existing_ids = {
+                alert.get("alert_id")
+                for alert in alerts
+            }
+
+            if (
+                current_alert_id
+                and current_alert_id not in existing_ids
+            ):
+                alerts.append({
+                    "tenant_id": tenant_id,
+                    "machine_id": machine_id,
+                    "alert_id": current_alert_id,
+                    "timestamp": timestamp,
+                    "telemetria": machine_data
+                })
+
+        instances = build_instances(alerts)
+
+        # Necesitamos al menos dos máquinas
+        distinct_machines = {
+            item["machine_id"]
+            for item in instances
         }
 
-        salida = {
-            **pattern_result,
-            "anomaly_result": anomaly_result,
-            "pattern_result": pattern_result,
-            "machine_data": machine_data
-        }
+        if len(distinct_machines) < 2:
+            return result
 
-        return salida
+        # 3. Invocar SageMaker
+        assignments = invoke_clustering_model(
+            instances
+        )
 
-    except Exception as e:
-        print(f"Error detecting patterns: {str(e)}")
-        raise e
+        # 4. Agrupar por cluster
+        clusters = {}
+
+        for assignment in assignments:
+            cluster_id = assignment["cluster_id"]
+
+            # -1 significa ruido en DBSCAN
+            if cluster_id == -1:
+                continue
+
+            clusters.setdefault(
+                cluster_id, []
+            ).append(assignment)
+
+        # 5. Guardar patrones encontrados
+        for cluster_id, members in clusters.items():
+
+            machine_ids = sorted({
+                member["machine_id"]
+                for member in members
+            })
+
+            if len(machine_ids) < 2:
+                continue
+
+            alert_ids = sorted({
+                member["alert_id"]
+                for member in members
+            })
+
+            # Identificador determinístico
+            fingerprint = "|".join([
+                tenant_id,
+                timestamp,
+                str(cluster_id),
+                ",".join(alert_ids)
+            ])
+
+            pattern_id = (
+                "PAT-"
+                + hashlib.sha256(
+                    fingerprint.encode("utf-8")
+                ).hexdigest()[:16].upper()
+            )
+
+            # Puntaje heurístico provisional.
+            # No representa probabilidad estadística.
+            confidence = round(
+                min(
+                    0.99,
+                    0.70 + 0.05 * len(machine_ids)
+                ),
+                2
+            )
+
+            pattern = {
+                "tenant_id": tenant_id,
+                "sk": pattern_id,
+                "pattern_id": pattern_id,
+                "cluster_id": cluster_id,
+                "pattern_type": (
+                    "shared_anomalous_behavior"
+                ),
+                "machine_ids": machine_ids,
+                "affected_zone": affected_zone,
+                "confidence": Decimal(
+                    str(confidence)
+                ),
+                "alert_ids": alert_ids,
+                "machines_affected": len(machine_ids),
+                "start_time": start_timestamp,
+                "end_time": timestamp,
+                "detected_at": datetime.now(
+                    timezone.utc
+                ).isoformat()
+            }
+
+            try:
+                patterns_table.put_item(
+                    Item=pattern,
+                    ConditionExpression=(
+                        "attribute_not_exists(tenant_id) "
+                        "AND attribute_not_exists(sk)"
+                    )
+                )
+
+            except ClientError as exc:
+                if exc.response.get(
+                    "Error", {}
+                ).get("Code") != (
+                    "ConditionalCheckFailedException"
+                ):
+                    raise
+
+                logger.info(
+                    "Patrón ya registrado: %s",
+                    pattern_id
+                )
+
+            # 6. Reportar patrones que afectan
+            # a la máquina actualmente evaluada
+            if machine_id in machine_ids:
+                if (
+                    not result["pattern_detected"]
+                    or confidence > result["confidence"]
+                ):
+                    result.update({
+                        "pattern_detected": True,
+                        "pattern_type": (
+                            "shared_anomalous_behavior"
+                        ),
+                        "affected_machines": machine_ids,
+                        "affected_zone": affected_zone,
+                        "confidence": confidence
+                    })
+
+        return result
+
+    except Exception:
+        logger.exception(
+            "Error detectando patrones"
+        )
+        raise

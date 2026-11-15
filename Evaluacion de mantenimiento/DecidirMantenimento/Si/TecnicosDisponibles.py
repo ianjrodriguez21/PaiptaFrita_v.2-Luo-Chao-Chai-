@@ -1,20 +1,18 @@
 
 """
-AWS Lambda: TecnicosDisponibles
+Lambda: TecnicosDisponibles
 
-Busca técnicos disponibles para atender un incidente.
+Tabla: t_tecnicos
+PK: tenant_id
+SK: technician_id
 
-Tabla provisional DynamoDB: t_tecnicos
-Partition Key: tenant_id
-Sort Key: technician_id
-
-No modifica registros ni asigna técnicos.
+Salida: technicians_result
+No modifica datos.
 """
 
 import os
 import math
 import logging
-from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -24,47 +22,24 @@ logger.setLevel(logging.INFO)
 
 dynamodb = boto3.resource("dynamodb")
 
-TECHNICIANS_TABLE_NAME = os.environ.get(
-    "TECHNICIANS_TABLE_NAME",
-    "t_tecnicos"
+TABLE_NAME = os.environ.get(
+    "TECHNICIANS_TABLE_NAME", "t_tecnicos"
 )
 
-table = dynamodb.Table(TECHNICIANS_TABLE_NAME)
+table = dynamodb.Table(TABLE_NAME)
+
+SPECIALTY_MAP = {
+    "possible_bearing_failure": ["engine"],
+    "possible_hydraulic_pressure_failure": ["hydraulics"],
+    "abnormal_fuel_consumption": ["engine"],
+    "abnormal_vibration": ["engine"],
+    "abnormal_temperature": ["engine"]
+}
 
 
-def haversine(lat1, lon1, lat2, lon2):
-    """Calcula distancia geográfica en kilómetros."""
-
-    earth_radius = 6371.0
-
-    lat1, lon1, lat2, lon2 = map(
-        math.radians,
-        [lat1, lon1, lat2, lon2]
-    )
-
-    delta_lat = lat2 - lat1
-    delta_lon = lon2 - lon1
-
-    a = (
-        math.sin(delta_lat / 2) ** 2
-        + math.cos(lat1)
-        * math.cos(lat2)
-        * math.sin(delta_lon / 2) ** 2
-    )
-
-    a = max(0.0, min(1.0, a))
-
-    return 2 * earth_radius * math.asin(math.sqrt(a))
-
-
-def validate_coordinates(latitude, longitude):
-    """Valida coordenadas y devuelve floats."""
-
-    try:
-        lat = float(latitude)
-        lon = float(longitude)
-    except (ValueError, TypeError):
-        raise ValueError("Coordenadas inválidas")
+def coordinates(lat, lon):
+    lat = float(lat)
+    lon = float(lon)
 
     if not (
         math.isfinite(lat)
@@ -72,234 +47,208 @@ def validate_coordinates(latitude, longitude):
         and -90 <= lat <= 90
         and -180 <= lon <= 180
     ):
-        raise ValueError("Coordenadas fuera de rango")
+        raise ValueError("Coordenadas invalidas")
 
     return lat, lon
 
 
-def get_required_specialties(event):
-    """
-    Obtiene especialidades explícitas o las infiere
-    del tipo de incidente.
-    """
+def haversine(lat1, lon1, lat2, lon2):
+    radius = 6371.0
 
-    specialties = event.get("required_specialties")
+    lat1, lon1, lat2, lon2 = map(
+        math.radians,
+        [lat1, lon1, lat2, lon2]
+    )
 
-    if specialties is None:
-        specialty = event.get("required_specialty")
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
 
-        if specialty:
-            specialties = [specialty]
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1)
+        * math.cos(lat2)
+        * math.sin(dlon / 2) ** 2
+    )
 
-    if specialties is None:
-        incident_type = event.get("incident_type", "")
-
-        mapping = {
-            "possible_bearing_failure": ["engine"],
-            "possible_hydraulic_pressure_failure": ["hydraulics"],
-            "abnormal_fuel_consumption": ["engine"],
-            "abnormal_vibration": ["engine"],
-        }
-
-        specialties = mapping.get(incident_type, [])
-
-    if isinstance(specialties, str):
-        specialties = [specialties]
-
-    if not isinstance(specialties, list):
-        raise ValueError(
-            "required_specialties debe ser una lista"
-        )
-
-    return sorted({
-        s.strip().lower()
-        for s in specialties
-        if isinstance(s, str) and s.strip()
-    })
+    return 2 * radius * math.asin(
+        math.sqrt(min(1.0, max(0.0, a)))
+    )
 
 
-def get_technicians(tenant_id):
-    """Consulta todos los técnicos de un tenant."""
-
-    technicians = []
+def query_technicians(tenant_id):
+    items = []
     last_key = None
 
     while True:
         params = {
             "KeyConditionExpression": (
                 Key("tenant_id").eq(tenant_id)
-            )
+            ),
+            "ConsistentRead": True
         }
 
         if last_key:
             params["ExclusiveStartKey"] = last_key
 
         response = table.query(**params)
-
-        technicians.extend(
-            response.get("Items", [])
-        )
-
+        items.extend(response.get("Items", []))
         last_key = response.get("LastEvaluatedKey")
 
         if not last_key:
             break
 
-    return technicians
+    return items
 
 
 def lambda_handler(event, context):
+    tenant_id = event.get("tenant_id")
 
-    try:
-        # Recuperar datos desde Step Functions
-        data = event.get("Payload", event)
+    incident = event.get("incident_result") or {}
+    machine = event.get("machine_data") or {}
+    evaluation = event.get("evaluation_result") or {}
 
-        tenant_id = data.get("tenant_id")
-        incident_id = data.get("incident_id")
+    incident_id = incident.get("incident_id")
 
-        machine_data = data.get("machine_data") or {}
-
-        latitude = data.get(
-            "latitude",
-            machine_data.get("latitude")
+    if not tenant_id or not incident_id:
+        raise ValueError(
+            "Falta tenant_id o incident_result.incident_id"
         )
 
-        longitude = data.get(
-            "longitude",
-            machine_data.get("longitude")
-        )
+    if incident.get("tenant_id") != tenant_id:
+        raise ValueError("Tenant del incidente no coincide")
 
-        if not tenant_id or not incident_id:
-            raise ValueError(
-                "tenant_id e incident_id son obligatorios"
-            )
+    machine_id = event.get("machine_id")
 
-        machine_lat, machine_lon = validate_coordinates(
-            latitude,
-            longitude
-        )
+    if incident.get("machine_id") != machine_id:
+        raise ValueError("Maquina del incidente no coincide")
 
-        required_specialties = get_required_specialties(data)
+    machine_lat, machine_lon = coordinates(
+        machine.get("latitude"),
+        machine.get("longitude")
+    )
 
-        # Configuración opcional
-        max_distance_km = float(
-            data.get("max_distance_km", 100)
-        )
+    incident_type = (
+        incident.get("incident_type")
+        or evaluation.get("incident_type")
+    )
 
-        max_results = int(
-            data.get("max_results", 10)
-        )
+    required = event.get("required_specialties")
 
-        if (
-            not math.isfinite(max_distance_km)
-            or max_distance_km <= 0
-            or not 1 <= max_results <= 100
-        ):
-            raise ValueError(
-                "max_distance_km o max_results inválidos"
-            )
+    if required is None:
+        required = SPECIALTY_MAP.get(incident_type)
 
-        # Consultar DynamoDB
-        technicians = get_technicians(tenant_id)
-
-        available_technicians = []
-
-        for technician in technicians:
-
-            if technician.get("availability") != "available":
-                continue
-
-            tech_id = technician.get("technician_id")
-
-            if not tech_id:
-                continue
-
-            try:
-                tech_lat, tech_lon = validate_coordinates(
-                    technician.get("latitude"),
-                    technician.get("longitude")
-                )
-            except ValueError:
-                logger.warning(
-                    "Técnico %s sin coordenadas válidas",
-                    tech_id
-                )
-                continue
-
-            specialties = technician.get(
-                "specialties", []
-            )
-
-            specialties_normalized = {
-                s.lower().strip()
-                for s in specialties
-                if isinstance(s, str)
-            }
-
-            # Compatibilidad: basta con una especialidad
-            specialty_match = (
-                not required_specialties
-                or bool(
-                    specialties_normalized.intersection(
-                        required_specialties
-                    )
-                )
-            )
-
-            # No asignar candidatos incompatibles
-            if not specialty_match:
-                continue
-
-            distance = haversine(
-                machine_lat,
-                machine_lon,
-                tech_lat,
-                tech_lon
-            )
-
-            if distance > max_distance_km:
-                continue
-
-            available_technicians.append({
-                "technician_id": tech_id,
-                "name": technician.get("name", ""),
-                "distance_km": round(distance, 2),
-                "specialty_match": specialty_match,
-                "specialties": sorted(specialties_normalized),
-                "availability": "available"
-            })
-
-        # Ordenar por cercanía
-        available_technicians.sort(
-            key=lambda t: (
-                t["distance_km"],
-                t["technician_id"]
-            )
-        )
-
-        available_technicians = available_technicians[
-            :max_results
-        ]
-
-        result = {
+    # No inventar especialidades para fallas desconocidas
+    if not required:
+        return {
             "tenant_id": tenant_id,
             "incident_id": incident_id,
-            "required_specialties": required_specialties,
-            "available_technicians": available_technicians,
-            "total_available": len(available_technicians),
-            "technician_found": bool(available_technicians)
+            "available_technicians": [],
+            "required_specialties": [],
+            "technician_found": False,
+            "status": "specialty_undefined"
         }
 
-        logger.info(
-            "Incidente %s: %d técnicos candidatos",
-            incident_id,
-            len(available_technicians)
+    if isinstance(required, str):
+        required = [required]
+
+    if not isinstance(required, list):
+        raise ValueError(
+            "required_specialties debe ser una lista"
         )
 
-        return result
+    required = sorted({
+        item.lower().strip()
+        for item in required
+        if isinstance(item, str) and item.strip()
+    })
 
-    except Exception:
-        logger.exception(
-            "Error buscando técnicos disponibles"
+    if not required:
+        raise ValueError("Especialidades vacias")
+
+    max_distance = float(
+        event.get("max_distance_km", 100)
+    )
+
+    max_results = int(
+        event.get("max_results", 10)
+    )
+
+    if (
+        not math.isfinite(max_distance)
+        or max_distance <= 0
+        or not 1 <= max_results <= 100
+    ):
+        raise ValueError("Limites de busqueda invalidos")
+
+    candidates = []
+
+    for technician in query_technicians(tenant_id):
+        if technician.get("availability") != "available":
+            continue
+
+        specialties = technician.get("specialties", [])
+
+        if not isinstance(specialties, list):
+            continue
+
+        normalized = {
+            str(s).lower().strip()
+            for s in specialties
+        }
+
+        if not normalized.intersection(required):
+            continue
+
+        technician_id = technician.get("technician_id")
+
+        if not technician_id:
+            continue
+
+        try:
+            tech_lat, tech_lon = coordinates(
+                technician.get("latitude"),
+                technician.get("longitude")
+            )
+        except (TypeError, ValueError):
+            continue
+
+        distance = haversine(
+            machine_lat,
+            machine_lon,
+            tech_lat,
+            tech_lon
         )
-        raise
+
+        if distance > max_distance:
+            continue
+
+        candidates.append({
+            "technician_id": technician_id,
+            "name": technician.get("name", ""),
+            "distance_km": round(distance, 2),
+            "specialty_match": True,
+            "specialties": sorted(normalized),
+            "availability": "available"
+        })
+
+    candidates.sort(
+        key=lambda x: (
+            x["distance_km"],
+            x["technician_id"]
+        )
+    )
+
+    candidates = candidates[:max_results]
+
+    return {
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "required_specialties": required,
+        "available_technicians": candidates,
+        "total_available": len(candidates),
+        "technician_found": bool(candidates),
+        "status": (
+            "available" if candidates
+            else "no_technician_available"
+        )
+    }

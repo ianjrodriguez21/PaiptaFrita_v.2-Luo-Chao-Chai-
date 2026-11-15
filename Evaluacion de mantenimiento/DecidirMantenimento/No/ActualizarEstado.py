@@ -1,69 +1,124 @@
+
+"""
+Lambda: ActualizarEstado
+
+Tabla: t_maquina
+PK: tenant_id
+SK: machine_id
+
+Entrada: contexto de Step Functions
+Salida: status_result
+"""
+
 import os
-import json
-import boto3
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import boto3
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 dynamodb = boto3.resource("dynamodb")
 
-MACHINES_TABLE = os.environ["MACHINES_TABLE_NAME"]
-table = dynamodb.Table(MACHINES_TABLE)
+MACHINES_TABLE_NAME = os.environ.get(
+    "MACHINES_TABLE_NAME", "t_maquina"
+)
+
+table = dynamodb.Table(MACHINES_TABLE_NAME)
 
 
 def lambda_handler(event, context):
+    tenant_id = event.get("tenant_id")
+    machine_id = event.get("machine_id")
+    timestamp = event.get("timestamp")
+
+    evaluation = event.get("evaluation_result")
+    maintenance = event.get("maintenance_result")
+
+    if not all([tenant_id, machine_id, timestamp]):
+        raise ValueError(
+            "tenant_id, machine_id y timestamp son obligatorios"
+        )
+
+    if not isinstance(evaluation, dict):
+        raise ValueError("Falta evaluation_result")
+
+    if not isinstance(maintenance, dict):
+        raise ValueError("Falta maintenance_result")
+
+    if (
+        evaluation.get("recommended_state") != "normal"
+        or maintenance.get("next_action") != "normal_operation"
+        or maintenance.get("maintenance_recommended") is not False
+    ):
+        raise ValueError(
+            "Esta Lambda solo permite operacion normal"
+        )
+
+    risk_score = float(evaluation["risk_score"])
+
+    if not 0 <= risk_score < 30:
+        raise ValueError("risk_score incompatible")
+
+    updated_at = datetime.now(
+        timezone.utc
+    ).isoformat()
+
     try:
-        tenant_id = event.get("tenant_id")
-        machine_id = event.get("machine_id")
-        risk_score = event.get("risk_score")
-        recommended_state = event.get("recommended_state")
-
-        # Validar datos obligatorios
-        if not tenant_id or not machine_id:
-            raise ValueError("tenant_id and machine_id are required")
-
-        if risk_score is None or recommended_state is None:
-            raise ValueError("risk_score and recommended_state are required")
-
-        # Solo actualizar máquinas sin necesidad de mantenimiento
-        if recommended_state != "normal" or float(risk_score) >= 30:
-            raise ValueError(
-                "Machine does not qualify for normal status update"
-            )
-
-        timestamp = datetime.now(timezone.utc).isoformat()
-
-        # Actualizar registro de la máquina
-        response = table.update_item(
+        table.update_item(
             Key={
                 "tenant_id": tenant_id,
                 "machine_id": machine_id
             },
-            UpdateExpression="""
-                SET current_status = :status,
-                    last_evaluation = :evaluation
-            """,
+            UpdateExpression=(
+                "SET last_evaluation = :evaluation, "
+                "last_evaluated_at = :evaluated_at"
+            ),
+            ConditionExpression=(
+                "attribute_exists(tenant_id) "
+                "AND attribute_exists(machine_id) "
+                "AND #ts = :event_ts"
+            ),
+            ExpressionAttributeNames={
+                "#ts": "timestamp"
+            },
             ExpressionAttributeValues={
-                ":status": "operational",
                 ":evaluation": {
                     "risk_score": Decimal(str(risk_score)),
                     "recommended_state": "normal",
                     "maintenance_recommended": False,
                     "evaluated_at": timestamp
-                }
-            },
-            ReturnValues="ALL_NEW"
+                },
+                ":evaluated_at": updated_at,
+                ":event_ts": timestamp
+            }
         )
 
         return {
             "tenant_id": tenant_id,
             "machine_id": machine_id,
+            "timestamp": timestamp,
             "current_status": "operational",
-            "risk_score": float(risk_score),
-            "maintenance_recommended": False,
+            "risk_score": risk_score,
             "status_updated": True,
-            "updated_at": timestamp
+            "updated_at": updated_at,
+            "status": "evaluated"
         }
 
-    except Exception as e:
-        print(f"Error updating machine status: {str(e)}")
-        raise
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != (
+            "ConditionalCheckFailedException"
+        ):
+            raise
+
+        # Evaluación antigua o máquina inexistente
+        return {
+            "tenant_id": tenant_id,
+            "machine_id": machine_id,
+            "timestamp": timestamp,
+            "status_updated": False,
+            "status": "stale_or_missing"
+        }

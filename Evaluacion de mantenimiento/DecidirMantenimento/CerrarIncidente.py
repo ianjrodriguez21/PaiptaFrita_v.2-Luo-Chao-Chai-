@@ -2,12 +2,19 @@
 """
 Lambda: CerrarIncidente
 
-Tabla provisional:
-t_incidentes
-    PK: tenant_id
-    SK: sk = INC#<incident_id>
+Tabla: t_incidentes
+PK: tenant_id
+SK: sk = INC#incident_id
 
-Cierra un incidente existente en DynamoDB.
+Entrada:
+    incident_result
+    intervention_result
+
+Salida:
+    closure_result
+
+Solo cierra intervenciones completadas
+con resultado operational.
 """
 
 import os
@@ -30,40 +37,90 @@ INCIDENTS_TABLE_NAME = os.environ.get(
 table = dynamodb.Table(INCIDENTS_TABLE_NAME)
 
 
-def format_result(item):
+def format_result(item, closed_now):
     return {
         "tenant_id": item["tenant_id"],
         "incident_id": item["incident_id"],
         "machine_id": item["machine_id"],
+        "intervention_id": item.get("intervention_id"),
         "status": item["status"],
         "resolved_at": item.get("resolved_at"),
-        "resolution": item.get("resolution")
+        "resolution": item.get("resolution"),
+        "closed_now": closed_now
     }
 
 
 def lambda_handler(event, context):
     try:
-        data = event.get("Payload", event)
+        tenant_id = event.get("tenant_id")
+        machine_id = event.get("machine_id")
 
-        tenant_id = data.get("tenant_id")
-        incident_id = data.get("incident_id")
-        machine_id = data.get("machine_id")
-        resolution = data.get("resolution")
+        incident = event.get("incident_result")
+        intervention = event.get("intervention_result")
 
-        if not all([
-            tenant_id,
-            incident_id,
-            machine_id,
-            resolution
-        ]):
+        if not tenant_id or not machine_id:
             raise ValueError(
-                "tenant_id, incident_id, machine_id "
-                "y resolution son obligatorios"
+                "tenant_id y machine_id obligatorios"
             )
 
-        if not isinstance(resolution, str):
+        if not isinstance(incident, dict):
             raise ValueError(
-                "resolution debe ser texto"
+                "Falta incident_result"
+            )
+
+        if not isinstance(intervention, dict):
+            raise ValueError(
+                "Falta intervention_result"
+            )
+
+        incident_id = incident.get("incident_id")
+        intervention_id = intervention.get(
+            "intervention_id"
+        )
+
+        if not incident_id or not intervention_id:
+            raise ValueError(
+                "IDs de incidente e intervencion obligatorios"
+            )
+
+        # 1. Comprobar contexto
+        if (
+            incident.get("tenant_id") != tenant_id
+            or incident.get("machine_id") != machine_id
+            or intervention.get("tenant_id") != tenant_id
+            or intervention.get("machine_id") != machine_id
+            or intervention.get("incident_id") != incident_id
+        ):
+            raise ValueError(
+                "Incidente e intervencion no coinciden"
+            )
+
+        # 2. Verificar reparación completada
+        if intervention.get("status") != "completed":
+            raise ValueError(
+                "La intervencion no ha terminado"
+            )
+
+        if intervention.get("result") != "operational":
+            raise ValueError(
+                "No se puede cerrar: equipo no operativo"
+            )
+
+        diagnosis = intervention.get("diagnosis")
+
+        if not isinstance(diagnosis, str) or not diagnosis.strip():
+            raise ValueError(
+                "La intervencion necesita diagnostico"
+            )
+
+        resolution = event.get("resolution")
+
+        if resolution is None:
+            resolution = diagnosis
+
+        if not isinstance(resolution, str) or not resolution.strip():
+            raise ValueError(
+                "resolution obligatoria"
             )
 
         resolved_at = datetime.now(
@@ -75,43 +132,45 @@ def lambda_handler(event, context):
             "sk": f"INC#{incident_id}"
         }
 
+        # 3. Cerrar solo desde in_progress
         try:
             response = table.update_item(
                 Key=key,
                 UpdateExpression=(
                     "SET #status = :resolved, "
-                    "resolved_at = :time, "
-                    "resolution = :resolution"
+                    "resolved_at = :resolved_at, "
+                    "resolution = :resolution, "
+                    "intervention_id = :intervention"
                 ),
                 ConditionExpression=(
                     "attribute_exists(tenant_id) "
                     "AND attribute_exists(sk) "
                     "AND machine_id = :machine "
-                    "AND #status IN (:open, :assigned, :progress)"
+                    "AND #status = :progress"
                 ),
                 ExpressionAttributeNames={
                     "#status": "status"
                 },
                 ExpressionAttributeValues={
                     ":resolved": "resolved",
-                    ":time": resolved_at,
+                    ":resolved_at": resolved_at,
                     ":resolution": resolution.strip(),
+                    ":intervention": intervention_id,
                     ":machine": machine_id,
-                    ":open": "open",
-                    ":assigned": "assigned",
                     ":progress": "in_progress"
                 },
                 ReturnValues="ALL_NEW"
             )
 
-            item = response["Attributes"]
+            return format_result(
+                response["Attributes"],
+                closed_now=True
+            )
 
         except ClientError as exc:
-            error_code = exc.response.get(
-                "Error", {}
-            ).get("Code")
-
-            if error_code != "ConditionalCheckFailedException":
+            if exc.response["Error"]["Code"] != (
+                "ConditionalCheckFailedException"
+            ):
                 raise
 
             existing = table.get_item(
@@ -126,30 +185,29 @@ def lambda_handler(event, context):
 
             if existing.get("machine_id") != machine_id:
                 raise ValueError(
-                    "El incidente no pertenece a esa máquina"
+                    "El incidente pertenece a otra maquina"
                 )
 
+            # Reintento de un cierre anterior
             if existing.get("status") == "resolved":
-                logger.info(
-                    "El incidente %s ya estaba resuelto",
-                    incident_id
+                if existing.get(
+                    "intervention_id"
+                ) != intervention_id:
+                    raise ValueError(
+                        "Incidente cerrado por otra intervencion"
+                    )
+
+                return format_result(
+                    existing,
+                    closed_now=False
                 )
-                return format_result(existing)
 
             raise ValueError(
-                "El incidente no puede cerrarse "
-                "desde su estado actual"
+                "Estado de incidente no permite cierre"
             )
-
-        logger.info(
-            "Incidente %s cerrado exitosamente",
-            incident_id
-        )
-
-        return format_result(item)
 
     except Exception:
         logger.exception(
-            "Error cerrando incidente"
+            "Error en CerrarIncidente"
         )
         raise

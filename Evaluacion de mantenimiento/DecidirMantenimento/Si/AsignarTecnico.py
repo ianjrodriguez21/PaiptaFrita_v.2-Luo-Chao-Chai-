@@ -2,22 +2,22 @@
 """
 Lambda: AsignarTecnico
 
-Tablas provisionales:
-- t_tecnicos:
-    PK: tenant_id
-    SK: technician_id
-- t_asignaciones:
-    PK: tenant_id
-    SK: sk
+t_tecnicos:
+    PK tenant_id, SK technician_id
 
-Recibe candidatos de TecnicosDisponibles.
-Asigna el técnico más cercano disponible.
+t_asignaciones:
+    PK tenant_id, SK sk
+
+t_incidentes:
+    PK tenant_id, SK sk
+
+Salida: assignment_result
 """
 
 import os
+import math
 import hashlib
 import logging
-import math
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -28,45 +28,45 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-dynamodb = boto3.resource("dynamodb")
+db = boto3.resource("dynamodb")
 client = boto3.client("dynamodb")
 serializer = TypeSerializer()
 
 TECHNICIANS_TABLE = os.environ.get(
     "TECHNICIANS_TABLE_NAME", "t_tecnicos"
 )
-
 ASSIGNMENTS_TABLE = os.environ.get(
     "ASSIGNMENTS_TABLE_NAME", "t_asignaciones"
 )
+INCIDENTS_TABLE = os.environ.get(
+    "INCIDENTS_TABLE_NAME", "t_incidentes"
+)
 
-assignments_table = dynamodb.Table(ASSIGNMENTS_TABLE)
+assignments = db.Table(ASSIGNMENTS_TABLE)
 
 
-def serialize_item(item):
-    """Convierte un diccionario al formato DynamoDB."""
+def av(item):
     return {
-        key: serializer.serialize(value)
-        for key, value in item.items()
+        k: serializer.serialize(v)
+        for k, v in item.items()
     }
 
 
-def existing_assignment(tenant_id, incident_id):
-    response = assignments_table.get_item(
+def previous_assignment(tenant_id, incident_id):
+    return assignments.get_item(
         Key={
             "tenant_id": tenant_id,
             "sk": f"ASG#{incident_id}"
         },
         ConsistentRead=True
-    )
-    return response.get("Item")
+    ).get("Item")
 
 
-def format_assignment(item):
+def output(item):
     return {
         "tenant_id": item["tenant_id"],
-        "assignment_id": item["assignment_id"],
         "incident_id": item["incident_id"],
+        "assignment_id": item["assignment_id"],
         "technician_id": item["technician_id"],
         "assigned_at": item["assigned_at"],
         "distance_km": float(item["distance_km"]),
@@ -75,197 +75,201 @@ def format_assignment(item):
 
 
 def lambda_handler(event, context):
-    try:
-        data = event.get("Payload", event)
+    tenant_id = event.get("tenant_id")
+    incident = event.get("incident_result") or {}
+    technicians = event.get("technicians_result") or {}
 
-        tenant_id = data.get("tenant_id")
-        incident_id = data.get("incident_id")
+    incident_id = incident.get("incident_id")
 
-        candidates = data.get(
-            "available_technicians", []
+    if not tenant_id or not incident_id:
+        raise ValueError("Falta tenant_id o incident_id")
+
+    if (
+        incident.get("tenant_id") != tenant_id
+        or technicians.get("tenant_id") != tenant_id
+        or technicians.get("incident_id") != incident_id
+    ):
+        raise ValueError("Contexto inconsistente")
+
+    previous = previous_assignment(
+        tenant_id, incident_id
+    )
+
+    if previous:
+        return output(previous)
+
+    candidates = technicians.get(
+        "available_technicians", []
+    )
+
+    if not isinstance(candidates, list):
+        raise ValueError(
+            "available_technicians invalido"
         )
 
-        if not tenant_id or not incident_id:
-            raise ValueError(
-                "tenant_id e incident_id son obligatorios"
-            )
+    valid = []
 
-        if not isinstance(candidates, list):
-            raise ValueError(
-                "available_technicians debe ser una lista"
-            )
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
 
-        # Comprobar si ya existe una asignación
-        previous = existing_assignment(
-            tenant_id, incident_id
+        if candidate.get("specialty_match") is not True:
+            continue
+
+        tech_id = candidate.get("technician_id")
+
+        try:
+            distance = float(candidate["distance_km"])
+        except (ValueError, TypeError, KeyError):
+            continue
+
+        if (
+            not tech_id
+            or not math.isfinite(distance)
+            or distance < 0
+        ):
+            continue
+
+        valid.append({
+            "technician_id": tech_id,
+            "distance_km": distance
+        })
+
+    valid.sort(
+        key=lambda x: (
+            x["distance_km"],
+            x["technician_id"]
         )
+    )
 
-        if previous:
-            return format_assignment(previous)
+    assignment_id = (
+        "ASG-"
+        + hashlib.sha256(
+            f"{tenant_id}|{incident_id}".encode()
+        ).hexdigest()[:16].upper()
+    )
 
-        valid_candidates = []
+    for candidate in valid:
+        tech_id = candidate["technician_id"]
+        now = datetime.now(timezone.utc).isoformat()
 
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
+        item = {
+            "tenant_id": tenant_id,
+            "sk": f"ASG#{incident_id}",
+            "assignment_id": assignment_id,
+            "incident_id": incident_id,
+            "technician_id": tech_id,
+            "assigned_at": now,
+            "distance_km": Decimal(
+                str(candidate["distance_km"])
+            ),
+            "assignment_status": "assigned"
+        }
 
-            tech_id = candidate.get("technician_id")
+        try:
+            client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Update": {
+                            "TableName": TECHNICIANS_TABLE,
+                            "Key": av({
+                                "tenant_id": tenant_id,
+                                "technician_id": tech_id
+                            }),
+                            "UpdateExpression": (
+                                "SET #availability = :assigned, "
+                                "assigned_incident_id = :incident, "
+                                "assigned_at = :now"
+                            ),
+                            "ConditionExpression": (
+                                "attribute_exists(tenant_id) "
+                                "AND attribute_exists(technician_id) "
+                                "AND #availability = :available"
+                            ),
+                            "ExpressionAttributeNames": {
+                                "#availability": "availability"
+                            },
+                            "ExpressionAttributeValues": av({
+                                ":assigned": "assigned",
+                                ":available": "available",
+                                ":incident": incident_id,
+                                ":now": now
+                            })
+                        }
+                    },
+                    {
+                        "Put": {
+                            "TableName": ASSIGNMENTS_TABLE,
+                            "Item": av(item),
+                            "ConditionExpression": (
+                                "attribute_not_exists(tenant_id) "
+                                "AND attribute_not_exists(sk)"
+                            )
+                        }
+                    },
+                    {
+                        "Update": {
+                            "TableName": INCIDENTS_TABLE,
+                            "Key": av({
+                                "tenant_id": tenant_id,
+                                "sk": f"INC#{incident_id}"
+                            }),
+                            "UpdateExpression": (
+                                "SET #status = :assigned"
+                            ),
+                            "ConditionExpression": (
+                                "attribute_exists(tenant_id) "
+                                "AND attribute_exists(sk) "
+                                "AND #status = :open"
+                            ),
+                            "ExpressionAttributeNames": {
+                                "#status": "status"
+                            },
+                            "ExpressionAttributeValues": av({
+                                ":assigned": "assigned",
+                                ":open": "open"
+                            })
+                        }
+                    }
+                ]
+            )
 
+            return output(item)
+
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != (
+                "TransactionCanceledException"
+            ):
+                raise
+
+            previous = previous_assignment(
+                tenant_id, incident_id
+            )
+
+            if previous:
+                return output(previous)
+
+            reasons = exc.response.get(
+                "CancellationReasons", []
+            )
+
+            # Solo buscar otro tecnico cuando
+            # la condicion del tecnico falle.
             if (
-                not tech_id
-                or candidate.get("specialty_match") is not True
+                len(reasons) >= 3
+                and reasons[0].get("Code")
+                    == "ConditionalCheckFailed"
+                and reasons[1].get("Code") == "None"
+                and reasons[2].get("Code") == "None"
             ):
                 continue
 
-            try:
-                distance = float(
-                    candidate.get("distance_km")
-                )
-            except (TypeError, ValueError):
-                continue
+            raise
 
-            if not math.isfinite(distance) or distance < 0:
-                continue
-
-            valid_candidates.append({
-                "technician_id": tech_id,
-                "distance_km": distance
-            })
-
-        # Priorizar el más cercano
-        valid_candidates.sort(
-            key=lambda t: (
-                t["distance_km"],
-                t["technician_id"]
-            )
-        )
-
-        assignment_id = (
-            "ASG-"
-            + hashlib.sha256(
-                f"{tenant_id}|{incident_id}".encode()
-            ).hexdigest()[:16].upper()
-        )
-
-        for candidate in valid_candidates:
-
-            technician_id = candidate["technician_id"]
-            assigned_at = datetime.now(
-                timezone.utc
-            ).isoformat()
-
-            item = {
-                "tenant_id": tenant_id,
-                "sk": f"ASG#{incident_id}",
-                "assignment_id": assignment_id,
-                "incident_id": incident_id,
-                "technician_id": technician_id,
-                "assigned_at": assigned_at,
-                "distance_km": Decimal(
-                    str(candidate["distance_km"])
-                ),
-                "assignment_status": "assigned"
-            }
-
-            try:
-                client.transact_write_items(
-                    TransactItems=[
-                        {
-                            "Update": {
-                                "TableName": TECHNICIANS_TABLE,
-                                "Key": serialize_item({
-                                    "tenant_id": tenant_id,
-                                    "technician_id": technician_id
-                                }),
-                                "UpdateExpression": (
-                                    "SET #availability = :assigned, "
-                                    "assigned_incident_id = :incident, "
-                                    "assigned_at = :time"
-                                ),
-                                "ConditionExpression": (
-                                    "attribute_exists(tenant_id) "
-                                    "AND attribute_exists(technician_id) "
-                                    "AND #availability = :available"
-                                ),
-                                "ExpressionAttributeNames": {
-                                    "#availability": "availability"
-                                },
-                                "ExpressionAttributeValues": (
-                                    serialize_item({
-                                        ":assigned": "assigned",
-                                        ":available": "available",
-                                        ":incident": incident_id,
-                                        ":time": assigned_at
-                                    })
-                                )
-                            }
-                        },
-                        {
-                            "Put": {
-                                "TableName": ASSIGNMENTS_TABLE,
-                                "Item": serialize_item(item),
-                                "ConditionExpression": (
-                                    "attribute_not_exists(tenant_id) "
-                                    "AND attribute_not_exists(sk)"
-                                )
-                            }
-                        }
-                    ]
-                )
-
-                logger.info(
-                    "Técnico %s asignado al incidente %s",
-                    technician_id,
-                    incident_id
-                )
-
-                return format_assignment(item)
-
-            except ClientError as exc:
-                code = exc.response.get(
-                    "Error", {}
-                ).get("Code")
-
-                if code != "TransactionCanceledException":
-                    raise
-
-                # Si otro proceso asignó este incidente
-                # durante la transacción, recuperar resultado.
-                previous = existing_assignment(
-                    tenant_id, incident_id
-                )
-
-                if previous:
-                    return format_assignment(previous)
-
-                reasons = exc.response.get(
-                    "CancellationReasons", []
-                )
-
-                conditional_failure = any(
-                    reason.get("Code")
-                    == "ConditionalCheckFailed"
-                    for reason in reasons
-                )
-
-                if conditional_failure:
-                    # Otro proceso tomó este técnico.
-                    # Intentar con el siguiente candidato.
-                    continue
-
-                # Otro error transaccional: no ocultarlo.
-                raise
-
-        # Ningún técnico pudo asignarse.
-        # La orquestación decidirá reintentar o notificar.
-        return {
-            "tenant_id": tenant_id,
-            "incident_id": incident_id,
-            "assignment_status": "unassigned",
-            "technician_id": None,
-            "reason": "No available compatible technician"
-        }
-
-    except Exception:
-        logger.exception("Error al asignar técnico")
-        raise
+    return {
+        "tenant_id": tenant_id,
+        "incident_id": incident_id,
+        "technician_id": None,
+        "assignment_status": "unassigned",
+        "reason": "No compatible technician available"
+    }

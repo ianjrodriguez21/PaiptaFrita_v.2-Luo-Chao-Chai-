@@ -4,19 +4,24 @@ Lambda: NotificarUsuario
 
 Servicio: Amazon SNS
 
-Requiere variable de entorno:
-SNS_TOPIC_ARN
+Entrada:
+    tenant_id
+    incident_result
+    notification_request
 
-Publica notificaciones dirigidas a usuarios.
-Las suscripciones SNS deben utilizar filtros
-por tenant_id y user_id para evitar entregas
-a destinatarios incorrectos.
+Salida:
+    notification_result
+
+No utiliza IA.
+No modifica incidentes.
+
+El destinatario debe estar previamente validado.
 """
 
 import os
 import json
+import hashlib
 import logging
-import uuid
 from datetime import datetime, timezone
 
 import boto3
@@ -26,9 +31,9 @@ logger.setLevel(logging.INFO)
 
 sns = boto3.client("sns")
 
-SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
+SNS_TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
 
-VALID_NOTIFICATION_TYPES = {
+VALID_TYPES = {
     "incident_created",
     "incident_assignment",
     "critical_incident",
@@ -47,28 +52,24 @@ VALID_ROLES = {
 
 
 def build_message(notification_type, incident_id):
-    """Construye un mensaje según el evento."""
-
     messages = {
-        "incident_created": (
-            f"New incident {incident_id} has been created."
-        ),
-        "incident_assignment": (
-            f"Incident {incident_id} has been assigned."
-        ),
-        "critical_incident": (
-            f"Critical incident {incident_id} requires "
-            "immediate attention."
-        ),
-        "maintenance_scheduled": (
-            f"Maintenance scheduled for incident {incident_id}."
-        ),
-        "incident_resolved": (
-            f"Incident {incident_id} has been resolved."
-        ),
-        "low_stock": (
-            f"Insufficient stock detected for incident {incident_id}."
-        )
+        "incident_created":
+            f"Incident {incident_id} has been created.",
+
+        "incident_assignment":
+            f"Incident {incident_id} has been assigned.",
+
+        "critical_incident":
+            f"Critical incident {incident_id} requires attention.",
+
+        "maintenance_scheduled":
+            f"Maintenance scheduled for incident {incident_id}.",
+
+        "incident_resolved":
+            f"Incident {incident_id} has been resolved.",
+
+        "low_stock":
+            f"Insufficient stock for incident {incident_id}."
     }
 
     return messages[notification_type]
@@ -76,41 +77,98 @@ def build_message(notification_type, incident_id):
 
 def lambda_handler(event, context):
     try:
-        data = event.get("Payload", event)
+        # 1. Recuperar contexto
+        tenant_id = event.get("tenant_id")
+        incident = event.get("incident_result")
+        request = event.get("notification_request")
 
-        tenant_id = data.get("tenant_id")
-        user_id = data.get("user_id")
-        incident_id = data.get("incident_id")
-        notification_type = data.get("notification_type")
-        role = data.get("role")
+        if not tenant_id:
+            raise ValueError("tenant_id obligatorio")
 
-        if not all([
-            tenant_id,
-            user_id,
-            incident_id,
-            notification_type
-        ]):
+        if not isinstance(incident, dict):
             raise ValueError(
-                "tenant_id, user_id, incident_id y "
-                "notification_type son obligatorios"
+                "Falta incident_result"
             )
 
-        if notification_type not in VALID_NOTIFICATION_TYPES:
+        if not isinstance(request, dict):
             raise ValueError(
-                "Tipo de notificación no válido"
+                "Falta notification_request"
             )
 
-        if role is not None and role not in VALID_ROLES:
+        incident_id = incident.get("incident_id")
+        user_id = request.get("user_id")
+        notification_type = request.get(
+            "notification_type"
+        )
+        role = request.get("role")
+
+        if not incident_id or not user_id:
             raise ValueError(
-                "Rol de usuario no válido"
+                "incident_id y user_id obligatorios"
             )
 
-        if not SNS_TOPIC_ARN:
+        if incident.get("tenant_id") != tenant_id:
             raise ValueError(
-                "La variable SNS_TOPIC_ARN no está configurada"
+                "El incidente pertenece a otro tenant"
             )
 
-        message = data.get("message")
+        if notification_type not in VALID_TYPES:
+            raise ValueError(
+                "notification_type invalido"
+            )
+
+        if role not in VALID_ROLES:
+            raise ValueError(
+                "role invalido"
+            )
+
+        # 2. Comprobar condiciones del evento
+        if notification_type == "incident_resolved":
+            closure = event.get("closure_result")
+
+            if (
+                not isinstance(closure, dict)
+                or closure.get("status") != "resolved"
+                or closure.get("incident_id") != incident_id
+                or closure.get("tenant_id") != tenant_id
+            ):
+                raise ValueError(
+                    "No existe un cierre valido"
+                )
+
+        if notification_type == "incident_assignment":
+            assignment = event.get("assignment_result")
+
+            if (
+                not isinstance(assignment, dict)
+                or assignment.get("assignment_status") != "assigned"
+                or assignment.get("incident_id") != incident_id
+                or assignment.get("tenant_id") != tenant_id
+            ):
+                raise ValueError(
+                    "No existe una asignacion valida"
+                )
+
+        if notification_type == "critical_incident":
+            if incident.get("severity") != "critical":
+                raise ValueError(
+                    "El incidente no es critico"
+                )
+
+        if notification_type == "low_stock":
+            parts = event.get("parts_result")
+
+            if (
+                not isinstance(parts, dict)
+                or parts.get("incident_id") != incident_id
+                or parts.get("status") != "insufficient_stock"
+            ):
+                raise ValueError(
+                    "No existe una alerta de stock valida"
+                )
+
+        # 3. Construir mensaje
+        message = request.get("message")
 
         if message is None:
             message = build_message(
@@ -118,16 +176,28 @@ def lambda_handler(event, context):
                 incident_id
             )
 
-        if not isinstance(message, str) or not message.strip():
-            raise ValueError(
-                "El mensaje debe ser texto no vacío"
-            )
+        if (
+            not isinstance(message, str)
+            or not message.strip()
+        ):
+            raise ValueError("Mensaje invalido")
 
-        notification_id = data.get(
-            "notification_id"
-        ) or f"NOT-{uuid.uuid4().hex[:12].upper()}"
+        # 4. Identificador estable de notificacion
+        fingerprint = "|".join([
+            tenant_id,
+            incident_id,
+            user_id,
+            notification_type
+        ])
 
-        sent_at = datetime.now(
+        notification_id = (
+            "NOT-"
+            + hashlib.sha256(
+                fingerprint.encode("utf-8")
+            ).hexdigest()[:16].upper()
+        )
+
+        published_at = datetime.now(
             timezone.utc
         ).isoformat()
 
@@ -135,20 +205,26 @@ def lambda_handler(event, context):
             "tenant_id": tenant_id,
             "notification_id": notification_id,
             "user_id": user_id,
+            "role": role,
             "incident_id": incident_id,
             "notification_type": notification_type,
             "message": message,
-            "sent_at": sent_at
+            "published_at": published_at
         }
 
+        # 5. Atributos para filtros SNS
         attributes = {
             "tenant_id": {
                 "DataType": "String",
-                "StringValue": str(tenant_id)
+                "StringValue": tenant_id
             },
             "user_id": {
                 "DataType": "String",
-                "StringValue": str(user_id)
+                "StringValue": user_id
+            },
+            "role": {
+                "DataType": "String",
+                "StringValue": role
             },
             "notification_type": {
                 "DataType": "String",
@@ -156,12 +232,7 @@ def lambda_handler(event, context):
             }
         }
 
-        if role:
-            attributes["role"] = {
-                "DataType": "String",
-                "StringValue": role
-            }
-
+        # 6. Publicar evento SNS
         response = sns.publish(
             TopicArn=SNS_TOPIC_ARN,
             Subject="ArquiFusionCorp Notification",
@@ -172,22 +243,20 @@ def lambda_handler(event, context):
             MessageAttributes=attributes
         )
 
-        message_id = response["MessageId"]
-
         logger.info(
-            "Notificación %s publicada en SNS: %s",
-            notification_id,
-            message_id
+            "Notificacion %s publicada",
+            notification_id
         )
 
+        # 7. JSON directo para Step Functions
         return {
             **notification,
-            "sns_message_id": message_id,
+            "sns_message_id": response["MessageId"],
             "status": "published"
         }
 
     except Exception:
         logger.exception(
-            "Error enviando notificación SNS"
+            "Error en NotificarUsuario"
         )
         raise

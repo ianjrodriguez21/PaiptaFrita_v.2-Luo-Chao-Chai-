@@ -1,7 +1,22 @@
 
-import json
+"""
+ObtenerTelemetria.py
+
+API Gateway -> Lambda -> S3 + DynamoDB
+                            |
+                            v
+                     Step Functions
+
+Tabla t_maquina:
+PK: tenant_id
+SK: machine_id
+timestamp: atributo obligatorio
+"""
+
 import os
-import uuid
+import re
+import json
+import hashlib
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,68 +29,72 @@ logger.setLevel(logging.INFO)
 
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
+stepfunctions = boto3.client("stepfunctions")
 
-S3_BUCKET_NAME = os.environ.get(
-    "S3_BUCKET_NAME",
-    "bucket-telemetria-historico"
+S3_BUCKET_NAME = os.environ["S3_BUCKET_NAME"]
+
+MACHINES_TABLE_NAME = os.environ.get(
+    "MACHINES_TABLE_NAME", "t_maquina"
 )
 
-DYNAMODB_TABLE_NAME = os.environ.get(
-    "DYNAMODB_TABLE_NAME",
-    "t_maquina"
-)
+STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 
-table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+table = dynamodb.Table(MACHINES_TABLE_NAME)
+
+
+def http_response(code, data):
+    return {
+        "statusCode": code,
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "body": json.dumps(data)
+    }
 
 
 def normalize_timestamp(value):
-    """Convierte fechas ISO 8601 a UTC normalizado."""
-
     if value is None:
-        date = datetime.now(timezone.utc)
+        dt = datetime.now(timezone.utc)
     else:
-        if not isinstance(value, str):
-            raise ValueError(
-                "timestamp debe ser una fecha ISO 8601"
-            )
+        dt = datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        )
 
-        try:
-            date = datetime.fromisoformat(
-                value.replace("Z", "+00:00")
-            )
-        except ValueError as exc:
-            raise ValueError(
-                "Formato de timestamp inválido"
-            ) from exc
-
-        if date.tzinfo is None:
+        if dt.tzinfo is None:
             raise ValueError(
                 "timestamp debe incluir zona horaria"
             )
 
-        date = date.astimezone(timezone.utc)
+        dt = dt.astimezone(timezone.utc)
 
-    return date.isoformat(
+    return dt.isoformat(
         timespec="microseconds"
     ).replace("+00:00", "Z")
 
 
-def response(status_code, body):
-    return {
-        "statusCode": status_code,
-        "body": json.dumps(body)
-    }
+def validate_id(value, field):
+    if (
+        not isinstance(value, str)
+        or not re.fullmatch(
+            r"[A-Za-z0-9_-]{1,80}", value
+        )
+    ):
+        raise ValueError(
+            f"{field} tiene un formato inválido"
+        )
+
+    return value
 
 
 def lambda_handler(event, context):
     try:
-        # 1. Obtener datos
-        if isinstance(event.get("body"), str):
-            telemetry = json.loads(event["body"])
-        elif isinstance(event.get("body"), dict):
-            telemetry = event["body"]
+        # 1. Recibir telemetría
+        body = event.get("body", event)
+
+        if isinstance(body, str):
+            telemetry = json.loads(body)
         else:
-            telemetry = event
+            telemetry = body
 
         if not isinstance(telemetry, dict):
             raise ValueError(
@@ -84,67 +103,72 @@ def lambda_handler(event, context):
 
         telemetry = telemetry.copy()
 
-        tenant_id = telemetry.get("tenant_id")
-        machine_id = telemetry.get("machine_id")
+        tenant_id = validate_id(
+            telemetry.get("tenant_id"),
+            "tenant_id"
+        )
 
-        if not tenant_id or not machine_id:
-            return response(400, {
-                "error": (
-                    "tenant_id y machine_id son obligatorios"
-                )
-            })
+        machine_id = validate_id(
+            telemetry.get("machine_id"),
+            "machine_id"
+        )
 
-        # 2. Mantener el timestamp en la máquina
         timestamp = normalize_timestamp(
             telemetry.get("timestamp")
         )
 
         telemetry["timestamp"] = timestamp
 
-        # 3. Guardar histórico en S3
-        # Un archivo por lectura, organizado por máquina
-        unique_id = uuid.uuid4().hex[:12]
+        # El tenant debe validarse contra la identidad
+        # autenticada por API Gateway en producción.
 
+        # 2. Generar identificador determinístico
+        canonical = json.dumps(
+            telemetry,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False
+        )
+
+        event_id = hashlib.sha256(
+            canonical.encode("utf-8")
+        ).hexdigest()
+
+        # 3. Guardar histórico en S3
         s3_key = (
             f"{tenant_id}/"
             f"{machine_id}/"
-            f"{timestamp}_{unique_id}.json"
+            f"{timestamp}_{event_id[:16]}.json"
         )
 
         s3.put_object(
             Bucket=S3_BUCKET_NAME,
             Key=s3_key,
-            Body=json.dumps(telemetry).encode("utf-8"),
+            Body=canonical.encode("utf-8"),
             ContentType="application/json"
         )
 
-        # 4. Preparar registro actual DynamoDB
-        # Las claves serán tenant_id y machine_id
+        # 4. Guardar estado actual en t_maquina
         item = json.loads(
-            json.dumps(telemetry),
+            canonical,
             parse_float=Decimal
         )
 
-        # No usar sk = machine_id#timestamp
-        # Cada máquina ocupa un único registro
         item.pop("sk", None)
         item.pop("pk", None)
-        item.pop("machine_timestamp", None)
 
         item["tenant_id"] = tenant_id
         item["machine_id"] = machine_id
-        item["timestamp"] = timestamp
 
-        # 5. Guardar solamente si es una lectura
-        # más reciente que la almacenada
-        updated_current = False
+        updated = False
+        outdated = False
 
         try:
             table.put_item(
                 Item=item,
                 ConditionExpression=(
                     "attribute_not_exists(#ts) "
-                    "OR #ts <= :incoming"
+                    "OR #ts < :incoming"
                 ),
                 ExpressionAttributeNames={
                     "#ts": "timestamp"
@@ -153,48 +177,97 @@ def lambda_handler(event, context):
                     ":incoming": timestamp
                 }
             )
-
-            updated_current = True
+            updated = True
 
         except ClientError as exc:
-            code = exc.response.get(
-                "Error", {}
-            ).get("Code")
-
-            if code != "ConditionalCheckFailedException":
+            if exc.response["Error"]["Code"] != (
+                "ConditionalCheckFailedException"
+            ):
                 raise
 
-            # Lectura antigua: queda registrada en S3
-            # pero no reemplaza el estado actual
-            logger.info(
-                "Lectura histórica recibida para %s",
-                machine_id
+            # Verificar si es un reintento o lectura antigua
+            previous = table.get_item(
+                Key={
+                    "tenant_id": tenant_id,
+                    "machine_id": machine_id
+                },
+                ConsistentRead=True
+            ).get("Item", {})
+
+            previous_timestamp = previous.get(
+                "timestamp", ""
             )
 
-        logger.info(
-            "Telemetría procesada: %s / %s",
-            tenant_id,
-            machine_id
-        )
+            outdated = previous_timestamp > timestamp
 
-        return response(200, {
-            "message": "Telemetría procesada",
+        # No evaluar lecturas anteriores
+        if outdated:
+            return http_response(200, {
+                "status": "historical_only",
+                "tenant_id": tenant_id,
+                "machine_id": machine_id,
+                "timestamp": timestamp,
+                "stored_in_s3": True,
+                "state_machine_started": False
+            })
+
+        # 5. Contexto inicial de Step Functions
+        workflow_input = {
             "tenant_id": tenant_id,
             "machine_id": machine_id,
             "timestamp": timestamp,
-            "stored": {
-                "s3": True,
-                "dynamodb": updated_current
-            },
+            "event_id": event_id,
+            "machine_data": telemetry,
+            "storage": {
+                "bucket": S3_BUCKET_NAME,
+                "key": s3_key,
+                "current_state_updated": updated
+            }
+        }
+
+        execution_name = (
+            "telemetry-" + event_id[:40]
+        )
+
+        # 6. Iniciar evaluación de mantenimiento
+        try:
+            execution = stepfunctions.start_execution(
+                stateMachineArn=STATE_MACHINE_ARN,
+                name=execution_name,
+                input=json.dumps(workflow_input)
+            )
+
+            execution_arn = execution["executionArn"]
+
+        except ClientError as exc:
+            if (
+                exc.response["Error"]["Code"]
+                != "ExecutionAlreadyExists"
+            ):
+                raise
+
+            # Reintento de un evento ya ejecutado
+            execution_arn = None
+
+            logger.info(
+                "Ejecución previa para evento %s",
+                event_id
+            )
+
+        return http_response(202, {
+            "status": "accepted",
+            "tenant_id": tenant_id,
+            "machine_id": machine_id,
+            "timestamp": timestamp,
+            "event_id": event_id,
+            "dynamodb_updated": updated,
             "s3_path": s3_key,
-            "dynamodb_pk": tenant_id,
-            "dynamodb_sk": machine_id,
-            "status": "processed"
+            "execution_name": execution_name,
+            "execution_arn": execution_arn
         })
 
     except (ValueError, TypeError) as exc:
-        logger.warning("Telemetría inválida: %s", exc)
-        return response(400, {
+        return http_response(400, {
             "error": str(exc)
         })
 
@@ -202,6 +275,7 @@ def lambda_handler(event, context):
         logger.exception(
             "Error procesando telemetría"
         )
-        return response(500, {
-            "error": "Error interno al procesar telemetría"
+
+        return http_response(500, {
+            "error": "No se pudo procesar la telemetría"
         })

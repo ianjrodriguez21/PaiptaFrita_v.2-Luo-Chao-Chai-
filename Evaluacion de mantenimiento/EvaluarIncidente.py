@@ -1,151 +1,276 @@
-import json
+
+"""
+Lambda: EvaluarIncidente
+
+Entrada:
+    anomaly_result
+    pattern_result
+    historical_result
+
+Salida:
+    evaluation_result (JSON directo)
+
+No utiliza DynamoDB.
+No crea incidentes.
+Solo calcula el riesgo y clasifica.
+"""
+
+import logging
+import math
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
-def unwrap_result(value):
+def validate_score(value, name, scale=100):
     """
-    Permite recibir tanto un diccionario estándar de Step Functions
-    como una respuesta Lambda proxy con statusCode y body.
+    Valida un puntaje dentro de la escala indicada.
     """
-    if isinstance(value, str):
-        value = json.loads(value)
+    if isinstance(value, bool):
+        raise ValueError(f"{name} invalido")
 
-    if isinstance(value, dict) and "body" in value:
-        body = value["body"]
-        if isinstance(body, str):
-            return json.loads(body)
-        if isinstance(body, dict):
-            return body
+    try:
+        score = float(value)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"{name} debe ser numerico"
+        ) from exc
 
-    return value or {}
+    if not math.isfinite(score):
+        raise ValueError(
+            f"{name} debe ser finito"
+        )
 
+    if not 0 <= score <= scale:
+        raise ValueError(
+            f"{name} fuera de rango 0-{scale}"
+        )
 
-def normalize_score(value):
-    """Convierte un puntaje de escala 0-1 o 0-100 a escala uniforme 0-100."""
-    if value is None:
-        return 0.0
-
-    score = float(value)
-    if 0 <= score <= 1:
-        score *= 100
-
-    return max(0.0, min(score, 100.0))
+    return score
 
 
-def get_anomaly_score(anomaly_result):
-    anomalies = anomaly_result.get("anomalies", [])
-    if not anomalies:
+def calculate_anomaly_score(anomaly_result):
+    """
+    Convierte scores de anomalía a escala 0-100.
+
+    Escala provisional:
+    anomaly_score 0-1 -> 0-100.
+
+    IMPORTANTE: esto supone que el score del
+    modelo se ha calibrado a esa escala.
+    """
+
+    if not anomaly_result.get(
+        "anomaly_detected", False
+    ):
         return 0.0, []
 
-    scores = []
+    anomalies = anomaly_result.get(
+        "anomalies", []
+    )
+
+    if not isinstance(anomalies, list):
+        raise ValueError(
+            "anomalies debe ser una lista"
+        )
+
     variables = []
 
     for anomaly in anomalies:
-        score = normalize_score(anomaly.get("anomaly_score", 0))
-        scores.append(score)
-
         variable = anomaly.get("variable")
-        if variable:
+
+        if variable and variable not in variables:
             variables.append(variable)
 
-    # Severidad promedio de las anomalías detectadas
-    average_score = sum(scores) / len(scores)
+    # Preferir el puntaje global calculado
+    # por DetectarAnomalias.
+    raw_score = anomaly_result.get(
+        "anomaly_score"
+    )
 
-    # Múltiples anomalías simultáneas incrementan el riesgo
-    if len(anomalies) >= 3:
-        average_score = min(average_score + 10, 100.0)
+    if raw_score is None:
+        if not anomalies:
+            raise ValueError(
+                "Falta anomaly_score en anomalia detectada"
+            )
 
-    return average_score, variables
+        raw_score = max(
+            validate_score(
+                anomaly.get("anomaly_score"),
+                "anomaly_score",
+                1
+            )
+            for anomaly in anomalies
+        )
+
+    score = validate_score(
+        raw_score,
+        "anomaly_score",
+        1
+    ) * 100
+
+    # Varias variables anomalas aumentan el riesgo
+    if len(variables) >= 3:
+        score = min(
+            100.0,
+            score + 10
+        )
+
+    return round(score, 2), variables
 
 
-def infer_incident_type(variables, pattern_detected):
-    """[CORREGIDO]: Mapea combinaciones de variables a tipos de falla claros como en el PDF."""
-    var_set = set(variables)
-    if {"temperature", "vibration"}.issubset(var_set):
+def infer_incident_type(
+    variables, pattern_detected,
+    historical_risk
+):
+    """Identifica el tipo probable de falla."""
+
+    variable_set = set(variables)
+
+    if {
+        "temperature",
+        "vibration"
+    }.issubset(variable_set):
         return "possible_bearing_failure"
-    if "pressure" in var_set:
+
+    if "pressure" in variable_set:
         return "possible_hydraulic_pressure_failure"
-    if "fuel_consumption" in var_set:
+
+    if "fuel_consumption" in variable_set:
         return "abnormal_fuel_consumption"
-    if variables:
-        return "possible_" + "_and_".join(variables) + "_failure"
+
+    if "vibration" in variable_set:
+        return "abnormal_vibration"
+
+    if "temperature" in variable_set:
+        return "abnormal_temperature"
+
     if pattern_detected:
         return "shared_anomalous_behavior"
-    return "historical_risk_detected"
+
+    if historical_risk > 0:
+        return "historical_risk_detected"
+
+    return None
 
 
 def lambda_handler(event, context):
     try:
-        # [CORREGIDO]: Soporta tanto estructura anidada (anomaly_result/pattern_result/historical_result)
-        # como llaves planas en la raíz de 'event' si Step Functions encadena sin ResultPath
-        anomaly_result = unwrap_result(event.get("anomaly_result")) or {
-            "anomalies": event.get("anomalies", []),
-            "anomaly_detected": event.get("anomaly_detected", False)
-        }
-        pattern_result = unwrap_result(event.get("pattern_result")) or {
-            "pattern_detected": event.get("pattern_detected", False),
-            "confidence": event.get("confidence", 0.60)
-        }
-        historical_result = unwrap_result(event.get("historical_result")) or {
-            "historical_risk_score": event.get("historical_risk_score", 0),
-            "recurrence_detected": event.get("recurrence_detected", False),
-            "findings": event.get("findings", [])
-        }
+        # 1. Recuperar contexto
+        tenant_id = event.get("tenant_id")
+        machine_id = event.get("machine_id")
+        timestamp = event.get("timestamp")
 
-        # Identificar máquina y tenant
-        tenant_id = event.get("tenant_id") or anomaly_result.get("tenant_id")
-        machine_id = event.get("machine_id") or anomaly_result.get("machine_id")
+        if not tenant_id or not machine_id or not timestamp:
+            raise ValueError(
+                "tenant_id, machine_id y timestamp "
+                "son obligatorios"
+            )
 
-        if not tenant_id or not machine_id:
-            raise ValueError("tenant_id and machine_id are required")
+        anomaly_result = event.get(
+            "anomaly_result"
+        )
 
-        # Calcular puntaje de anomalía actual
-        anomaly_score, variables = get_anomaly_score(anomaly_result)
+        pattern_result = event.get(
+            "pattern_result"
+        )
 
-        # Evaluar patrones compartidos
-        pattern_detected = bool(pattern_result.get("pattern_detected", False))
+        historical_result = event.get(
+            "historical_result"
+        )
+
+        if not all(
+            isinstance(value, dict)
+            for value in [
+                anomaly_result,
+                pattern_result,
+                historical_result
+            ]
+        ):
+            raise ValueError(
+                "Faltan resultados de analisis previos"
+            )
+
+        # 2. Riesgo de anomalías
+        anomaly_score, variables = (
+            calculate_anomaly_score(
+                anomaly_result
+            )
+        )
+
+        # 3. Riesgo de patrones
+        pattern_detected = (
+            pattern_result.get(
+                "pattern_detected", False
+            )
+        )
+
         if pattern_detected:
-            raw_conf = pattern_result.get("confidence")
-            confidence = normalize_score(raw_conf if raw_conf not in (None, 0, 0.0) else 0.60)
-            pattern_score = confidence
+            pattern_score = validate_score(
+                pattern_result.get("confidence"),
+                "confidence",
+                1
+            ) * 100
         else:
             pattern_score = 0.0
 
-        # Obtener riesgo histórico
-        historical_score = normalize_score(
-            historical_result.get("historical_risk_score", 0)
+        # 4. Riesgo histórico
+        historical_score = validate_score(
+            historical_result.get(
+                "historical_risk_score"
+            ),
+            "historical_risk_score",
+            100
         )
 
-        # Calcular riesgo combinado (50% anomalía, 20% patrón compartido, 30% histórico)
+        recurrence_detected = bool(
+            historical_result.get(
+                "recurrence_detected", False
+            )
+        )
+
+        # 5. Riesgo total ponderado
         risk_score = (
             anomaly_score * 0.50
             + pattern_score * 0.20
             + historical_score * 0.30
         )
-        risk_score = round(max(0.0, min(risk_score, 100.0)))
 
-        # Clasificar incidente
+        risk_score = round(
+            min(100, max(0, risk_score))
+        )
+
+        # 6. Clasificación
         if risk_score >= 70:
+            recommended_state = "critical"
             severity = "critical"
             priority = "urgent"
-            recommended_state = "critical"
+
         elif risk_score >= 30:
+            recommended_state = "warning"
             severity = "medium"
             priority = "high"
-            recommended_state = "warning"
+
         else:
+            recommended_state = "normal"
             severity = "low"
             priority = "low"
-            recommended_state = "normal"
 
-        # Determinar si requiere crear incidente en Step Functions
-        incident_required = recommended_state != "normal"
+        incident_required = (
+            recommended_state != "normal"
+        )
 
-        # Identificar tipo de incidente
-        incident_type = infer_incident_type(variables, pattern_detected)
+        # 7. Tipo de incidente
+        incident_type = infer_incident_type(
+            variables,
+            pattern_detected,
+            historical_score
+        )
 
-        evaluation_result = {
+        result = {
             "tenant_id": tenant_id,
             "machine_id": machine_id,
+            "timestamp": timestamp,
             "incident_required": incident_required,
             "incident_type": incident_type,
             "severity": severity,
@@ -153,25 +278,32 @@ def lambda_handler(event, context):
             "risk_score": risk_score,
             "recommended_state": recommended_state,
             "analysis": {
-                "anomaly_score": round(anomaly_score, 2),
+                "anomaly_score": anomaly_score,
                 "pattern_detected": pattern_detected,
-                "pattern_score": round(pattern_score, 2),
-                "historical_risk_score": round(historical_score, 2),
+                "pattern_score": round(
+                    pattern_score, 2
+                ),
+                "historical_risk_score": (
+                    historical_score
+                ),
+                "recurrence_detected": (
+                    recurrence_detected
+                ),
                 "anomalous_variables": variables
             }
         }
 
-        # [CORREGIDO]: Incluye evaluation_result, historical_result y machine_data
-        # para alimentar directamente a RecomendarMantenimiento.py
-        salida = {
-            **evaluation_result,
-            "evaluation_result": evaluation_result,
-            "historical_result": historical_result,
-            "machine_data": event.get("machine_data", {})
-        }
+        logger.info(
+            "Maquina %s evaluada: %s (%s)",
+            machine_id,
+            recommended_state,
+            risk_score
+        )
 
-        return salida
+        return result
 
-    except Exception as e:
-        print(f"Error evaluating incident: {str(e)}")
+    except Exception:
+        logger.exception(
+            "Error en EvaluarIncidente"
+        )
         raise
