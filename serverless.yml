@@ -90,7 +90,8 @@ functions:
       - httpApi:
           path: /telemetria
           method: post
-          authorizer: aws_iam
+          authorizer:
+            type: aws_iam
 
   # ==================================
   # EVALUACION DE MANTENIMIENTO
