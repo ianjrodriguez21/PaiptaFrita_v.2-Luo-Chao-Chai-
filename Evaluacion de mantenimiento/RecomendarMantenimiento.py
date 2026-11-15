@@ -1,27 +1,3 @@
-def get_recommended_action(anomalous_variables, maintenance_type):
-    """Genera una acción recomendada según las variables anómalas detectadas."""
-    if not anomalous_variables:
-        if maintenance_type == "preventive":
-            return "Perform scheduled inspection, lubrication, and filter check"
-        return "No immediate action required"
-
-    actions = []
-    if "temperature" in anomalous_variables:
-        actions.append("inspect cooling and lubrication system")
-    if "vibration" in anomalous_variables:
-        actions.append("inspect main bearings, alignment, and mounts")
-    if "pressure" in anomalous_variables:
-        actions.append("check hydraulic lines, valves, and seals")
-    if "fuel_consumption" in anomalous_variables:
-        actions.append("inspect fuel injectors and engine efficiency")
-
-    if not actions:
-        return "Perform general diagnostic inspection on flagged components"
-
-    formatted = ", ".join(actions)
-    return formatted[0].upper() + formatted[1:]
-
-
 def lambda_handler(event, context):
     try:
         tenant_id = event.get("tenant_id")
@@ -30,28 +6,30 @@ def lambda_handler(event, context):
         if not tenant_id or not machine_id:
             raise ValueError("tenant_id and machine_id are required")
 
-        # Soportar tanto objetos anidados (ResultPath) como datos en la raíz del evento
-        evaluation = event.get("evaluation_result", event)
-        machine = event.get("machine_data", event)
-        historical = event.get("historical_result", event)
-        policy = event.get("maintenance_policy", {})
+        # [CORREGIDO]: Soporta tanto objetos anidados como llaves planas en 'event'
+        evaluation = event.get("evaluation_result") or event
+        machine = event.get("machine_data") or event
+        historical = event.get("historical_result") or event
+        policy = event.get("maintenance_policy") or {}
 
         risk_score = float(evaluation.get("risk_score", 0))
         state = evaluation.get("recommended_state", "normal")
-        anomalous_variables = evaluation.get("analysis", {}).get("anomalous_variables", [])
+        incident_required = evaluation.get("incident_required", state != "normal")
 
         historical_risk = float(historical.get("historical_risk_score", 0))
-        recurrence = historical.get("recurrence_detected", False)
+        recurrence = bool(historical.get("recurrence_detected", False))
 
-        # Fallback al campo 'operating_hours' del JSON de telemetría (PDF pág. 2)
-        hours_since_maintenance = float(
-            machine.get(
-                "operating_hours_since_last_maintenance",
-                machine.get("operating_hours", 0)
-            )
-        )
-
+        # [CORREGIDO]: El JSON de entrada del PDF envía 'operating_hours', no 'operating_hours_since_last_maintenance'.
+        # Ahora soporta ambos campos y evalúa ciclos de mantenimiento preventivo correctamente.
+        raw_hours_since = machine.get("operating_hours_since_last_maintenance")
+        total_operating_hours = float(machine.get("operating_hours", 0))
         preventive_interval = float(policy.get("preventive_interval_hours", 250))
+
+        if raw_hours_since is not None:
+            hours_since_maintenance = float(raw_hours_since)
+        else:
+            hours_since_maintenance = total_operating_hours
+
         machine_type = machine.get("machine_type", "unknown")
 
         # Valores iniciales
@@ -59,6 +37,7 @@ def lambda_handler(event, context):
         maintenance_type = None
         priority = "low"
         recommended_time = None
+        recommended_action = "Continue normal operation and standard monitoring."
         reason = "No maintenance required at this moment"
 
         # 1. Riesgo crítico
@@ -67,9 +46,10 @@ def lambda_handler(event, context):
             maintenance_type = "corrective"
             priority = "urgent"
             recommended_time = "immediately"
+            recommended_action = "Stop equipment immediately and dispatch specialized technician for inspection."
             reason = "Critical risk detected. Immediate maintenance is required."
 
-        # 2. Riesgo warning con o sin recurrencia
+        # 2. Riesgo warning (preventivo o predictivo según recurrencia)
         elif state == "warning" or risk_score >= 30:
             recommendation_required = True
 
@@ -77,26 +57,25 @@ def lambda_handler(event, context):
                 maintenance_type = "predictive"
                 priority = "high"
                 recommended_time = "within_24_hours"
+                recommended_action = "Inspect affected components (bearings, hydraulics, lubrication) within 24 hours."
                 reason = "Recurring anomalies or high historical risk detected."
             else:
                 maintenance_type = "preventive"
                 priority = "medium"
                 recommended_time = "within_7_days"
+                recommended_action = "Schedule preventive inspection and diagnostic check within 7 days."
                 reason = "Abnormal conditions detected. Preventive maintenance is recommended."
 
-        # 3. Riesgo normal: revisar intervalo de mantenimiento
+        # 3. Riesgo normal: revisar intervalo de mantenimiento preventivo por horas de operación
         elif hours_since_maintenance >= preventive_interval:
             recommendation_required = True
             maintenance_type = "preventive"
             priority = "medium"
             recommended_time = "scheduled"
+            recommended_action = "Perform scheduled preventive maintenance according to operating hours interval."
             reason = "Preventive maintenance interval has been reached."
 
-        recommended_action = get_recommended_action(anomalous_variables, maintenance_type)
-        maintenance_score = round(max(risk_score, historical_risk))
-
-        # 4. Construir respuesta alineada con el PDF (pág. 11) y Step Functions
-        recommendation = None
+        # Construir objeto detallado de recomendación
         if recommendation_required:
             recommendation = {
                 "maintenance_type": maintenance_type,
@@ -105,30 +84,37 @@ def lambda_handler(event, context):
                 "recommended_action": recommended_action,
                 "reason": reason
             }
+        else:
+            recommendation = None
+
+        # [CORREGIDO]: Salida unificada que cumple tanto con el esquema del PDF
+        # (maintenance_recommended, maintenance_score, recommended_action) como con el rombo de Step Functions
+        # (recommended_state, incident_required, recommendation)
+        maintenance_score = round(max(risk_score, historical_risk))
 
         result = {
             "tenant_id": tenant_id,
             "machine_id": machine_id,
             "machine_type": machine_type,
-
-            # Propagamos recommended_state para el rombo de decisión de Step Functions
             "recommended_state": state,
-
-            # Campos del contrato del PDF (pág. 11)
+            "incident_required": incident_required,
+            "risk_score": risk_score,
+            "severity": evaluation.get("severity", "low"),
+            "incident_type": evaluation.get("incident_type"),
+            "recommendation_required": recommendation_required,
             "maintenance_recommended": recommendation_required,
             "maintenance_type": maintenance_type,
             "maintenance_score": maintenance_score,
             "priority": priority,
+            "recommended_time": recommended_time,
             "recommended_action": recommended_action,
             "reason": reason,
-
-            # Tu estructura original conservada
-            "recommendation_required": recommendation_required,
             "recommendation": recommendation,
             "maintenance_context": {
                 "risk_score": risk_score,
                 "historical_risk_score": historical_risk,
                 "recurrence_detected": recurrence,
+                "operating_hours": total_operating_hours,
                 "operating_hours_since_last_maintenance": hours_since_maintenance,
                 "preventive_interval_hours": preventive_interval
             }
