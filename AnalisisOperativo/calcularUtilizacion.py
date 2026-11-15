@@ -15,7 +15,7 @@ dynamodb = boto3.resource("dynamodb")
 
 DYNAMODB_TABLE_NAME = os.environ.get(
     "DYNAMODB_TABLE_NAME",
-    "t_utilizacion"
+    "t_utilizations"
 )
 
 table = dynamodb.Table(DYNAMODB_TABLE_NAME)
