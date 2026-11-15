@@ -1,0 +1,6 @@
+
+.venv/
+
+machinAprendiendo/models/
+machinAprendiendo/artifacts/
+machinAprendiendo/__pycache__/
