@@ -37,12 +37,12 @@ client = boto3.client("dynamodb")
 serializer = TypeSerializer()
 
 PARTS_TABLE = os.environ.get(
-    "PARTS_TABLE_NAME", "t_repuestos"
+    "PARTS_TABLE_NAME", "t_spareparts"
 )
 
 RESERVATIONS_TABLE = os.environ.get(
     "RESERVATIONS_TABLE_NAME",
-    "t_reservas_repuestos"
+    "t_reservations"
 )
 
 parts_table = db.Table(PARTS_TABLE)
