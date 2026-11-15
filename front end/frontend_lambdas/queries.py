@@ -11,14 +11,13 @@ LOG = logging.getLogger(__name__)
 TABLES = {
     "machines": "MACHINES_TABLE_NAME",
     "incidents": "INCIDENTS_TABLE_NAME",
-    "maintenance": "MAINTENANCE_TABLE_NAME",
     "technicians": "TECHNICIANS_TABLE_NAME",
     "parts": "PARTS_TABLE_NAME",
     "utilization": "UTILIZATION_TABLE_NAME",
     "efficacy": "EFFICACY_TABLE_NAME",
     "predictions": "PREDICTIONS_TABLE_NAME",
 }
-DASHBOARD = ("machines", "incidents", "maintenance", "utilization", "efficacy", "predictions")
+DASHBOARD = ("machines", "incidents", "utilization", "efficacy", "predictions")
 TECHNICIAN_FIELDS = ("technician_id", "availability", "specialties")
 
 
@@ -89,10 +88,8 @@ def query_page(resource, tenant, parameters):
         sort_key = {
             "machines": "machine_id", "incidents": "sk", "technicians": "technician_id",
             "parts": "part_id", "utilization": "machine_id", "efficacy": "fecha",
-            "predictions": "sk", "maintenance": os.getenv("MAINTENANCE_SORT_KEY"),
+            "predictions": "sk",
         }[resource]
-        if not sort_key:
-            raise RequestError(503, "Clave de mantenimiento pendiente de configurar")
         kwargs["ExclusiveStartKey"] = {"tenant_id": tenant, sort_key: cursor}
 
     result = table(resource).query(**kwargs)

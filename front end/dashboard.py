@@ -19,11 +19,6 @@ SECTIONS = {
         "severity": "Severidad", "risk_score": "Riesgo", "status": "Estado",
         "detected_at": "Detección",
     }),
-    "maintenance": ("Mantenimientos", {
-        "maintenance_id": "ID", "machine_id": "Máquina", "maintenance_type": "Tipo",
-        "scheduled_date": "Programado", "next_review_date": "Próxima revisión",
-        "status": "Estado", "technician_id": "Técnico", "result": "Resultado",
-    }),
     "technicians": ("Técnicos", {
         "technician_id": "ID", "name": "Nombre", "specialties": "Especialidades",
         "availability": "Disponibilidad", "latitude": "Latitud", "longitude": "Longitud",
@@ -67,7 +62,6 @@ def overview(data):
         "Máquinas registradas": len(data["machines"]),
         "Máquinas con incidentes activos": sum(row["machine_id"] in affected for row in data["machines"]),
         "Incidentes abiertos": sum(row.get("status") == "open" for row in unresolved),
-        "Mantenimientos programados": sum(row.get("status") == "scheduled" for row in data["maintenance"]),
         "Repuestos con stock crítico": sum(
             row.get("status") in {"low_stock", "out_of_stock"} for row in data["parts"]
         ),

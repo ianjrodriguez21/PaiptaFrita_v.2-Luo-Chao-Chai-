@@ -32,31 +32,6 @@
       "status": "open"
     }
   ],
-  "maintenance": [
-    {
-      "tenant_id": "MINA_A",
-      "maintenance_id": "MNT-001",
-      "machine_id": "MAC-102",
-      "technician_id": "TEC-001",
-      "maintenance_type": "predictive",
-      "scheduled_date": "2026-11-15T10:00:00Z",
-      "completed_date": null,
-      "reason": "High vibration and temperature detected",
-      "status": "scheduled",
-      "result": null,
-      "maintenance_rule": "manufacturer_manual",
-      "frequency_months": 6,
-      "frequency_operating_hours": 500,
-      "last_maintenance_date": "2026-05-15T10:00:00Z",
-      "next_review_date": "2026-11-15T10:00:00Z",
-      "parts_used": [
-        {
-          "part_id": "PART-001",
-          "quantity": 1
-        }
-      ]
-    }
-  ],
   "technicians": [
     {
       "tenant_id": "MINA_A",
