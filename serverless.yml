@@ -97,25 +97,25 @@ functions:
   # ==================================
 
   detectarAnomalias:
-    handler: evaluacion_mantenimiento.DetectarAnomalias.lambda_handler
+    handler: EvaluacionDeMantenimiento.DetectarAnomalias.lambda_handler
     timeout: 60
     memorySize: 512
 
   detectarPatrones:
-    handler: evaluacion_mantenimiento.DetectarPatrones.lambda_handler
+    handler: EvaluacionDeMantenimiento.DetectarPatrones.lambda_handler
     timeout: 60
     memorySize: 512
 
   analisisHistorico:
-    handler: evaluacion_mantenimiento.AnalisisHistorico.lambda_handler
+    handler: EvaluacionDeMantenimiento.AnalisisHistorico.lambda_handler
     timeout: 180
     memorySize: 512
 
   evaluarIncidente:
-    handler: evaluacion_mantenimiento.EvaluarIncidente.lambda_handler
+    handler: EvaluacionDeMantenimiento.EvaluarIncidente.lambda_handler
 
   recomendarMantenimiento:
-    handler: evaluacion_mantenimiento.RecomendarMantenimiento.lambda_handler
+    handler: EvaluacionDeMantenimiento.RecomendarMantenimiento.lambda_handler
 
   # ==================================
   # OPERACION NORMAL
