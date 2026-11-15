@@ -24,7 +24,7 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.resource("dynamodb")
 
 MACHINES_TABLE_NAME = os.environ.get(
-    "MACHINES_TABLE_NAME", "t_maquina"
+    "MACHINES_TABLE_NAME", "t_machines"
 )
 
 table = dynamodb.Table(MACHINES_TABLE_NAME)
