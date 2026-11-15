@@ -1,0 +1,89 @@
+{
+  "machines": [
+    {
+      "tenant_id": "MINA_A",
+      "machine_id": "MAC-102",
+      "machine_type": "excavator",
+      "timestamp": "2026-11-14T21:45:00Z",
+      "latitude": -12.05,
+      "longitude": -77.03,
+      "operating_hours": 1250,
+      "temperature": 105,
+      "vibration": 8.2,
+      "pressure": 220,
+      "fuel_consumption": 32,
+      "fuel_level_liters": 204,
+      "fuel_level_percentage": 76,
+      "load_transported": 15000,
+      "speed": 5.5,
+      "engine_rpm": 1850,
+      "current_status": "operational"
+    }
+  ],
+  "incidents": [
+    {
+      "tenant_id": "MINA_A",
+      "incident_id": "INC-001",
+      "machine_id": "MAC-102",
+      "detected_at": "2026-11-14T21:45:00Z",
+      "incident_type": "abnormal_vibration",
+      "severity": "critical",
+      "risk_score": 87,
+      "status": "open"
+    }
+  ],
+  "maintenance": [
+    {
+      "tenant_id": "MINA_A",
+      "maintenance_id": "MNT-001",
+      "machine_id": "MAC-102",
+      "technician_id": "TEC-001",
+      "maintenance_type": "predictive",
+      "scheduled_date": "2026-11-15T10:00:00Z",
+      "completed_date": null,
+      "reason": "High vibration and temperature detected",
+      "status": "scheduled",
+      "result": null,
+      "maintenance_rule": "manufacturer_manual",
+      "frequency_months": 6,
+      "frequency_operating_hours": 500,
+      "last_maintenance_date": "2026-05-15T10:00:00Z",
+      "next_review_date": "2026-11-15T10:00:00Z",
+      "parts_used": [
+        {
+          "part_id": "PART-001",
+          "quantity": 1
+        }
+      ]
+    }
+  ],
+  "technicians": [
+    {
+      "tenant_id": "MINA_A",
+      "technician_id": "TEC-001",
+      "user_id": "USR-001",
+      "name": "Carlos Paez",
+      "latitude": -12.06,
+      "longitude": -77.04,
+      "specialties": [
+        "engine",
+        "hydraulics"
+      ],
+      "availability": "available"
+    }
+  ],
+  "parts": [
+    {
+      "tenant_id": "MINA_A",
+      "part_id": "PART-001",
+      "type": "bearing",
+      "name": "Main bearing",
+      "quantity": 5,
+      "minimum_stock": 2,
+      "warehouse_location": "Warehouse A",
+      "latitude": -12.04,
+      "longitude": -77.02,
+      "status": "available"
+    }
+  ]
+}
