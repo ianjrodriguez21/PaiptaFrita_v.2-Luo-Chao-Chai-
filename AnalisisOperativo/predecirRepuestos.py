@@ -6,7 +6,7 @@ import os
 dynamodb = boto3.resource('dynamodb')
 
 # Nombre de la tabla inyectado por serverless.yml
-DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 't_prediccion_repuestos')
+DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 't_predictions')
 
 def lambda_handler(event, context):
     try:
