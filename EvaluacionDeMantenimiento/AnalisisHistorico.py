@@ -36,15 +36,15 @@ dynamodb = boto3.resource("dynamodb")
 S3_BUCKET_NAME = os.environ["S3_BUCKET_NAME"]
 
 ANOMALIES_TABLE_NAME = os.environ.get(
-    "ANOMALIES_TABLE_NAME", "t_anomalias"
+    "ANOMALIES_TABLE_NAME", "t_anomalies"
 )
 
 INCIDENTS_TABLE_NAME = os.environ.get(
-    "INCIDENTS_TABLE_NAME", "t_incidentes"
+    "INCIDENTS_TABLE_NAME", "t_incidents"
 )
 
 ANALYSIS_TABLE_NAME = os.environ.get(
-    "ANALYSIS_TABLE_NAME", "t_analisis"
+    "ANALYSIS_TABLE_NAME", "t_analysis"
 )
 
 ANALYSIS_BUCKET_NAME = os.environ.get(
