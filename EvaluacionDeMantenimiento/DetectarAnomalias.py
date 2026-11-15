@@ -37,7 +37,7 @@ SAGEMAKER_ENDPOINT = os.environ["SAGEMAKER_ENDPOINT"]
 
 ALERTS_TABLE_NAME = os.environ.get(
     "ALERTS_TABLE_NAME",
-    "t_anomalias"
+    "t_anomalies"
 )
 
 table = dynamodb.Table(ALERTS_TABLE_NAME)
