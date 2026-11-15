@@ -34,7 +34,7 @@ stepfunctions = boto3.client("stepfunctions")
 S3_BUCKET_NAME = os.environ["S3_BUCKET_NAME"]
 
 MACHINES_TABLE_NAME = os.environ.get(
-    "MACHINES_TABLE_NAME", "t_maquina"
+    "MACHINES_TABLE_NAME", "t_machines"
 )
 
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
