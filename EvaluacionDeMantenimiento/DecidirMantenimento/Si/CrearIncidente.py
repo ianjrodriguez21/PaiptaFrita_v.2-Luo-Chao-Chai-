@@ -32,7 +32,7 @@ dynamodb = boto3.resource("dynamodb")
 
 INCIDENTS_TABLE_NAME = os.environ.get(
     "INCIDENTS_TABLE_NAME",
-    "t_incidentes"
+    "t_incidents"
 )
 
 table = dynamodb.Table(INCIDENTS_TABLE_NAME)
