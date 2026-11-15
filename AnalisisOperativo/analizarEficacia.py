@@ -8,7 +8,7 @@ from decimal import Decimal
 dynamodb = boto3.resource('dynamodb')
 
 # Nombre de la tabla inyectado por serverless.yml
-DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 't_eficacia')
+DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME', 't_efficacy')
 
 def lambda_handler(event, context):
     try:
