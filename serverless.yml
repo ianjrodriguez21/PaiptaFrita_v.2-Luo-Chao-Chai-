@@ -82,7 +82,7 @@ functions:
   obtenerTelemetria:
     name: ${self:service}-${sls:stage}-obtenerTelemetria
     handler: telemetria.ObtenerTelemetria.lambda_handler
-    timeout: 30
+    timeout: 25
 
     environment:
       STATE_MACHINE_ARN: arn:aws:states:${aws:region}:${aws:accountId}:stateMachine:${self:service}-${sls:stage}-mantenimiento
