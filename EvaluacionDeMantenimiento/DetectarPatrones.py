@@ -45,12 +45,12 @@ sagemaker = boto3.client("sagemaker-runtime")
 
 ALERTS_TABLE_NAME = os.environ.get(
     "ALERTS_TABLE_NAME",
-    "t_anomalias"
+    "t_anomalies"
 )
 
 PATTERNS_TABLE_NAME = os.environ.get(
     "PATTERNS_TABLE_NAME",
-    "t_patrones"
+    "t_patterns"
 )
 
 PATTERNS_ENDPOINT = os.environ[
