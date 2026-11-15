@@ -231,20 +231,3 @@ Resources:
           KeyType: HASH
         - AttributeName: sk
           KeyType: RANGE
-
-  # 14. MAINTENANCE
-  MantenimientoTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: ${sls:stage}-t_mantenimiento
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: tenant_id
-          AttributeType: S
-        - AttributeName: sk
-          AttributeType: S
-      KeySchema:
-        - AttributeName: tenant_id
-          KeyType: HASH
-        - AttributeName: sk
-          KeyType: RANGE
