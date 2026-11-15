@@ -1,0 +1,179 @@
+
+service: arquifusioncorp
+
+frameworkVersion: '4'
+
+plugins:
+  - serverless-step-functions
+
+provider:
+  name: aws
+  runtime: python3.12
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+
+  memorySize: 256
+  timeout: 30
+  logRetentionInDays: 14
+
+  environment:
+    MACHINES_TABLE_NAME: !Ref MaquinaTable
+    DYNAMODB_TABLE_NAME: !Ref MaquinaTable
+
+    ALERTS_TABLE_NAME: !Ref AnomaliasTable
+    ANOMALIES_TABLE_NAME: !Ref AnomaliasTable
+    PATTERNS_TABLE_NAME: !Ref PatronesTable
+    ANALYSIS_TABLE_NAME: !Ref AnalisisTable
+    INCIDENTS_TABLE_NAME: !Ref IncidentesTable
+    TECHNICIANS_TABLE_NAME: !Ref TecnicosTable
+    ASSIGNMENTS_TABLE_NAME: !Ref AsignacionesTable
+    PARTS_TABLE_NAME: !Ref RepuestosTable
+    RESERVATIONS_TABLE_NAME: !Ref ReservasRepuestosTable
+    INTERVENTIONS_TABLE_NAME: !Ref IntervencionesTable
+
+    S3_BUCKET_NAME: !Ref TelemetryBucket
+    SNS_TOPIC_ARN: !Ref NotificationsTopic
+
+    SAGEMAKER_ENDPOINT: ${param:anomalyEndpoint, 'NOT_CONFIGURED'}
+    SAGEMAKER_PATTERNS_ENDPOINT: ${param:patternsEndpoint, 'NOT_CONFIGURED'}
+
+  iam:
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
+
+
+package:
+  patterns:
+    - '!node_modules/**'
+    - '!resources/**'
+    - '!stepfunctions/**'
+    - '!**/ArchivosJASONDePrueba/**'
+    - '!**/__pycache__/**'
+    - '!README.md'
+
+functions:
+
+  # ====================================
+  # TELEMETRIA
+  # ====================================
+
+  obtenerTelemetria:
+    name: ${self:service}-${sls:stage}-obtenerTelemetria
+    handler: telemetria.ObtenerTelemetria.lambda_handler
+    timeout: 30
+    environment:
+      STATE_MACHINE_ARN: arn:aws:states:${aws:region}:${aws:accountId}:stateMachine:${self:service}-${sls:stage}-mantenimiento
+    events:
+      - httpApi:
+          path: /telemetria
+          method: post
+
+  # ====================================
+  # EVALUACION DE MANTENIMIENTO
+  # ====================================
+
+  detectarAnomalias:
+    handler: Evaluacion de mantenimiento.DetectarAnomalias.lambda_handler
+    timeout: 60
+    memorySize: 512
+
+  detectarPatrones:
+    handler: Evaluacion de mantenimiento.DetectarPatrones.lambda_handler
+    timeout: 60
+    memorySize: 512
+
+  analisisHistorico:
+    handler: Evaluacion de mantenimiento.AnalisisHistorico.lambda_handler
+    timeout: 180
+    memorySize: 512
+
+  evaluarIncidente:
+    handler: Evaluacion de mantenimiento.EvaluarIncidente.lambda_handler
+
+  recomendarMantenimiento:
+    handler: Evaluacion de mantenimiento.RecomendarMantenimiento.lambda_handler
+
+  # ====================================
+  # DECISION NORMAL
+  # ====================================
+
+  actualizarEstado:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.No.ActualizarEstado.lambda_handler
+
+  # ====================================
+  # DECISION CON INCIDENTE
+  # ====================================
+
+  crearIncidente:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.Si.CrearIncidente.lambda_handler
+
+  tecnicosDisponibles:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.Si.TecnicosDisponibles.lambda_handler
+
+  asignarTecnico:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.Si.AsignarTecnico.lambda_handler
+
+  buscarRepuestos:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.Si.BuscarRepuestos.lambda_handler
+
+  reservarRepuestos:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.Si.ReservarRepuestos.lambda_handler
+
+  registrarIntervenccion:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.Si.RegistrarIntervenccion.lambda_handler
+
+  cerrarIncidente:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.CerrarIncidente.lambda_handler
+
+  notificarUsuario:
+    handler: Evaluacion de mantenimiento.DecidirMantenimento.NotificarUsuario.lambda_handler
+
+  # ====================================
+  # ANALISIS OPERATIVO - EVENTBRIDGE
+  # ====================================
+
+  calcularUtilizacion:
+    handler: AnalisisOperativo.calcularUtilizacion.lambda_handler
+    environment:
+      DYNAMODB_TABLE_NAME: !Ref UtilizacionTable
+    events:
+      - schedule:
+          name: ${self:service}-${sls:stage}-utilizacion
+          rate: rate(1 day)
+          enabled: false
+
+  analizarEficacia:
+    handler: AnalisisOperativo.analizarEficacia.lambda_handler
+    environment:
+      DYNAMODB_TABLE_NAME: !Ref EficaciaTable
+    events:
+      - schedule:
+          name: ${self:service}-${sls:stage}-eficacia
+          rate: rate(1 day)
+          enabled: false
+
+  predecirRepuestos:
+    handler: AnalisisOperativo.predecirRepuestos.lambda_handler
+    environment:
+      DYNAMODB_TABLE_NAME: !Ref PrediccionRepuestosTable
+    events:
+      - schedule:
+          name: ${self:service}-${sls:stage}-prediccion
+          rate: rate(7 days)
+          enabled: false
+
+stepFunctions:
+  stateMachines:
+    mantenimiento:
+      name: ${self:service}-${sls:stage}-mantenimiento
+      type: STANDARD
+
+      role: arn:aws:iam::${aws:accountId}:role/LabRole
+
+      definition: ${file(./stepfunctions/evaluacion_mantenimiento.asl.yml)}
+
+      validate: true
+
+resources:
+  - ${file(./resources/dynamodb.yml)}
+  - ${file(./resources/s3.yml)}
+  - ${file(./resources/sns.yml)}

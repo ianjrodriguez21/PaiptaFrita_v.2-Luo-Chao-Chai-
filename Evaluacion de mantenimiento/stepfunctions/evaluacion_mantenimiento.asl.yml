@@ -1,0 +1,359 @@
+
+Comment: ArquiFusionCorp - Mantenimiento predictivo
+StartAt: DetectarAnomalias
+
+States:
+
+  # ====================================
+  # ETAPA 1: EVALUACION
+  # ====================================
+
+  DetectarAnomalias:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [detectarAnomalias, Arn]
+    ResultPath: $.anomaly_result
+    Retry:
+      - ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 3
+        BackoffRate: 2
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: DetectarPatrones
+
+  DetectarPatrones:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [detectarPatrones, Arn]
+    ResultPath: $.pattern_result
+    Retry:
+      - ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 3
+        BackoffRate: 2
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: AnalisisHistorico
+
+  AnalisisHistorico:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [analisisHistorico, Arn]
+    ResultPath: $.historical_result
+    Retry:
+      - ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 3
+        BackoffRate: 2
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: EvaluarIncidente
+
+  EvaluarIncidente:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [evaluarIncidente, Arn]
+    ResultPath: $.evaluation_result
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: RecomendarMantenimiento
+
+  RecomendarMantenimiento:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [recomendarMantenimiento, Arn]
+    ResultPath: $.maintenance_result
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: DecidirMantenimiento
+
+  # ====================================
+  # ETAPA 2: DECISION
+  # ====================================
+
+  DecidirMantenimiento:
+    Type: Choice
+    Choices:
+      - Variable: $.maintenance_result.next_action
+        StringEquals: normal_operation
+        Next: ActualizarEstado
+
+      - Variable: $.maintenance_result.next_action
+        StringEquals: schedule_preventive
+        Next: PendienteProgramacionPreventiva
+
+      - Variable: $.maintenance_result.next_action
+        StringEquals: schedule_maintenance
+        Next: CrearIncidente
+
+      - Variable: $.maintenance_result.next_action
+        StringEquals: urgent_intervention
+        Next: CrearIncidente
+
+    Default: DecisionInvalida
+
+  # ====================================
+  # RAMA NORMAL
+  # ====================================
+
+  ActualizarEstado:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [actualizarEstado, Arn]
+    ResultPath: $.status_result
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: FinOperacionNormal
+
+  FinOperacionNormal:
+    Type: Pass
+    Result:
+      workflow_status: evaluation_completed
+    ResultPath: $.workflow_result
+    End: true
+
+  # ====================================
+  # RAMA PREVENTIVA
+  # ====================================
+
+  PendienteProgramacionPreventiva:
+    Type: Pass
+    Result:
+      workflow_status: pending_preventive_scheduling
+      message: Preventive maintenance scheduling required
+    ResultPath: $.workflow_result
+    End: true
+
+  # ====================================
+  # RAMA DE INCIDENTES
+  # ====================================
+
+  CrearIncidente:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [crearIncidente, Arn]
+    ResultPath: $.incident_result
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: NotificacionConfigurada
+
+  # Notificacion inicial opcional
+  NotificacionConfigurada:
+    Type: Choice
+    Choices:
+      - And:
+          - Variable: $.notification_request.user_id
+            IsPresent: true
+          - Variable: $.notification_request.role
+            IsPresent: true
+          - Variable: $.notification_request.notification_type
+            IsPresent: true
+        Next: NotificarUsuario
+    Default: RevisarTipoAtencion
+
+  NotificarUsuario:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [notificarUsuario, Arn]
+    ResultPath: $.notification_result
+    Retry:
+      - ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 2
+        BackoffRate: 2
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.notification_error
+        Next: RevisarTipoAtencion
+    Next: RevisarTipoAtencion
+
+  RevisarTipoAtencion:
+    Type: Choice
+    Choices:
+      - Variable: $.maintenance_result.next_action
+        StringEquals: urgent_intervention
+        Next: TecnicosDisponibles
+
+      - Variable: $.maintenance_result.next_action
+        StringEquals: schedule_maintenance
+        Next: PendienteProgramacionIncidente
+
+    Default: DecisionInvalida
+
+  PendienteProgramacionIncidente:
+    Type: Pass
+    Result:
+      workflow_status: pending_maintenance_scheduling
+    ResultPath: $.workflow_result
+    End: true
+
+  # ====================================
+  # TECNICOS
+  # ====================================
+
+  TecnicosDisponibles:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [tecnicosDisponibles, Arn]
+    ResultPath: $.technicians_result
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: HayTecnicoDisponible
+
+  HayTecnicoDisponible:
+    Type: Choice
+    Choices:
+      - Variable: $.technicians_result.technician_found
+        BooleanEquals: true
+        Next: AsignarTecnico
+    Default: PendienteTecnico
+
+  AsignarTecnico:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [asignarTecnico, Arn]
+    ResultPath: $.assignment_result
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: TecnicoAsignado
+
+  TecnicoAsignado:
+    Type: Choice
+    Choices:
+      - Variable: $.assignment_result.assignment_status
+        StringEquals: assigned
+        Next: BuscarRepuestos
+    Default: PendienteTecnico
+
+  PendienteTecnico:
+    Type: Pass
+    Result:
+      workflow_status: pending_technician
+    ResultPath: $.workflow_result
+    End: true
+
+  # ====================================
+  # REPUESTOS
+  # ====================================
+
+  BuscarRepuestos:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [buscarRepuestos, Arn]
+    ResultPath: $.parts_result
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: RevisarDisponibilidadRepuestos
+
+  RevisarDisponibilidadRepuestos:
+    Type: Choice
+    Choices:
+      - Variable: $.parts_result.status
+        StringEquals: no_parts_required
+        Next: PendienteIntervencion
+
+      - Variable: $.parts_result.status
+        StringEquals: parts_not_defined
+        Next: PendienteDiagnosticoRepuestos
+
+      - Variable: $.parts_result.all_parts_available
+        BooleanEquals: true
+        Next: ReservarRepuestos
+
+    Default: PendienteRepuestos
+
+  ReservarRepuestos:
+    Type: Task
+    Resource:
+      Fn::GetAtt: [reservarRepuestos, Arn]
+    ResultPath: $.reservation_result
+    Catch:
+      - ErrorEquals: [States.ALL]
+        ResultPath: $.workflow_error
+        Next: ErrorEnEvaluacion
+    Next: ReservasCompletas
+
+  ReservasCompletas:
+    Type: Choice
+    Choices:
+      - Variable: $.reservation_result.all_reserved
+        BooleanEquals: true
+        Next: PendienteIntervencion
+    Default: PendienteRepuestos
+
+  PendienteDiagnosticoRepuestos:
+    Type: Pass
+    Result:
+      workflow_status: pending_parts_diagnosis
+    ResultPath: $.workflow_result
+    End: true
+
+  PendienteRepuestos:
+    Type: Pass
+    Result:
+      workflow_status: pending_parts
+    ResultPath: $.workflow_result
+    End: true
+
+  # ====================================
+  # INTERVENCION HUMANA PENDIENTE
+  # ====================================
+
+  PendienteIntervencion:
+    Type: Pass
+    Result:
+      workflow_status: pending_human_intervention
+      message: Waiting for technician confirmation
+    ResultPath: $.workflow_result
+    End: true
+
+  # ====================================
+  # ERRORES
+  # ====================================
+
+  DecisionInvalida:
+    Type: Fail
+    Error: InvalidMaintenanceDecision
+    Cause: Unknown maintenance action
+
+  ErrorEnEvaluacion:
+    Type: Fail
+    Error: MaintenanceWorkflowFailed
+    Cause: A maintenance task failed

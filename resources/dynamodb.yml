@@ -1,0 +1,234 @@
+
+Resources:
+
+  # 1. MAQUINAS
+  MaquinaTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_maquina
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: machine_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: machine_id
+          KeyType: RANGE
+
+  # 2. ANOMALIAS
+  AnomaliasTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_anomalias
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: tenant-timestamp-index
+          KeySchema:
+            - AttributeName: tenant_id
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # 3. PATRONES
+  PatronesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_patrones
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # 4. ANALISIS HISTORICO
+  AnalisisTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_analisis
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # 5. INCIDENTES
+  IncidentesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_incidentes
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # 6. TECNICOS
+  TecnicosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_tecnicos
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: technician_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: technician_id
+          KeyType: RANGE
+
+  # 7. ASIGNACIONES
+  AsignacionesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_asignaciones
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # 8. REPUESTOS
+  RepuestosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_repuestos
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: part_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: part_id
+          KeyType: RANGE
+
+  # 9. RESERVAS DE REPUESTOS
+  ReservasRepuestosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_reservas_repuestos
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # 10. INTERVENCIONES
+  IntervencionesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_intervenciones
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # 11. UTILIZACION
+  UtilizacionTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_utilizacion
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: machine_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: machine_id
+          KeyType: RANGE
+
+  # 12. EFICACIA
+  EficaciaTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_eficacia
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: fecha
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: fecha
+          KeyType: RANGE
+
+  # 13. PREDICCION DE REPUESTOS
+  PrediccionRepuestosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ${sls:stage}-t_prediccion_repuestos
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
