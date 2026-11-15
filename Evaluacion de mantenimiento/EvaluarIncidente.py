@@ -1,6 +1,4 @@
-
 import json
-
 
 def unwrap_result(value):
     """
@@ -47,15 +45,12 @@ def get_anomaly_score(anomaly_result):
     variables = []
 
     for anomaly in anomalies:
-
         score = normalize_score(
             anomaly.get("anomaly_score", 0)
         )
-
         scores.append(score)
 
         variable = anomaly.get("variable")
-
         if variable:
             variables.append(variable)
 
@@ -72,7 +67,6 @@ def get_anomaly_score(anomaly_result):
 def lambda_handler(event, context):
 
     try:
-
         # 1. Read previous Lambda results
         anomaly_result = unwrap_result(
             event.get("anomaly_result")
@@ -113,13 +107,10 @@ def lambda_handler(event, context):
         )
 
         if pattern_detected:
-
             confidence = normalize_score(
                 pattern_result.get("confidence", 0.60)
             )
-
             pattern_score = confidence
-
         else:
             pattern_score = 0
 
@@ -143,26 +134,21 @@ def lambda_handler(event, context):
 
         # 7. Classify incident
         if risk_score >= 70:
-
             severity = "critical"
             priority = "urgent"
             recommended_state = "critical"
-
         elif risk_score >= 30:
-
             severity = "medium"
             priority = "high"
             recommended_state = "warning"
-
         else:
-
             severity = "low"
             priority = "low"
             recommended_state = "normal"
 
-        # 8. Determine whether an incident is required
+        # 8. Determine whether an incident is required (CORREGIDO SEGÚN ARQUITECTURA)
         incident_required = (
-            recommended_state == "critical"
+            recommended_state != "normal"
         )
 
         # 9. Identify possible incident type
@@ -202,7 +188,5 @@ def lambda_handler(event, context):
         return result
 
     except Exception as e:
-
         print(f"Error evaluating incident: {str(e)}")
-
         raise
