@@ -1,0 +1,11 @@
+
+{
+  "tenant_id": "MINA_A",
+  "incident_id": "INC-001",
+  "required_parts": [
+    {
+      "part_id": "PART-001",
+      "quantity": 1
+    }
+  ]
+}

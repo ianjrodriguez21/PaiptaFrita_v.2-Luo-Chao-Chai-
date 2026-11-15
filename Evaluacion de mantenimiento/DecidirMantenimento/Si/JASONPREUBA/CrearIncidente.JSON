@@ -1,0 +1,10 @@
+
+{
+  "tenant_id": "MINA_A",
+  "machine_id": "MAC-102",
+  "timestamp": "2026-11-14T21:45:00Z",
+  "incident_required": true,
+  "incident_type": "possible_bearing_failure",
+  "severity": "critical",
+  "risk_score": 87
+}
