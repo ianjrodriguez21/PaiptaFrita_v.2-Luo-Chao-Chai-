@@ -5,7 +5,9 @@ import json
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+
+import cognito_login
 
 ROOT = Path(__file__).resolve().parent
 SECTIONS = {
@@ -28,7 +30,7 @@ SECTIONS = {
         "minimum_stock": "Stock mínimo", "status": "Estado", "warehouse_location": "Almacén",
     }),
 }
-TENANT = "MINA_A"
+DEMO_TENANT = "MINA_A"
 
 
 def display(value):
@@ -40,14 +42,28 @@ def display(value):
 
 
 def table(rows, columns):
-    headings = "".join(f"<th scope='col'>{escape(label)}</th>" for label in columns.values())
+    headings = "".join(
+        f'<th scope="col"><button class="sort-button" type="button">'
+        f'{escape(label)} <span aria-hidden="true">↕</span></button></th>'
+        for label in columns.values()
+    )
     records = "".join(
-        "<tr>" + "".join(f"<td>{display(row.get(field))}</td>" for field in columns) + "</tr>"
+        "<tr>" + "".join(
+            f'<td data-sort="{escape(str(row[field]), quote=True) if row.get(field) is not None else ""}">'
+            f'{display(row.get(field))}</td>' for field in columns
+        ) + "</tr>"
         for row in rows
     )
     if not records:
         return "<p class='empty'>Sin registros para mostrar.</p>"
-    return f"<div class='table-scroll'><table><thead><tr>{headings}</tr></thead><tbody>{records}</tbody></table></div>"
+    return (
+        '<div class="table-tools">'
+        '<label>Buscar en la tabla <input class="table-search" type="search" autocomplete="off"></label>'
+        '<span class="table-results" role="status"></span>'
+        '</div>'
+        '<div class="table-scroll">'
+        f'<table><thead><tr>{headings}</tr></thead><tbody>{records}</tbody></table></div>'
+    )
 
 
 def section(resource, data):
@@ -77,14 +93,41 @@ def overview(data):
     breakdown = table(severities, {"severity": "Severidad", "count": "Cantidad"})
     return (
         f"<div class='metrics'>{metrics}</div>"
-        f"<section class='panel'><h2>Incidentes activos por severidad</h2>{breakdown}</section>"
+        f"<div class='overview-grid'><section class='panel'><h2>Incidentes activos por severidad</h2>{breakdown}</section>"
         + section("incidents", data)
+        + "</div>"
     )
+
+
+def public_page():
+    return """<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ArquiFusionCorp</title>
+<link rel="stylesheet" href="/dashboard.css">
+</head>
+<body class="public">
+<main class="public-main">
+  <section class="public-card">
+    <span class="brand-mark" aria-hidden="true">A</span>
+    <h1>ArquiFusionCorp</h1>
+    <p>Consulta el estado de la flota, los incidentes, los técnicos y los repuestos.</p>
+    <p>Inicia sesión para acceder a la información.</p>
+    <div class="public-actions">
+      <a class="button primary" href="/auth/login">Iniciar sesión</a>
+      <a class="button" href="/auth/signup">Crear cuenta</a>
+    </div>
+  </section>
+</main>
+</body>
+</html>"""
 
 
 def page(resource):
     source = json.loads((ROOT / "mocks" / "operaciones.json").read_text(encoding="utf-8"))
-    data = {key: [row for row in source[key] if row.get("tenant_id") == TENANT] for key in SECTIONS}
+    data = {key: [row for row in source[key] if row.get("tenant_id") == DEMO_TENANT] for key in SECTIONS}
     links = {"": "Resumen", **{key: value[0] for key, value in SECTIONS.items()}}
     nav = "".join(
         f"<a href='/{key}'{' aria-current=page' if key == resource else ''}>{label}</a>"
@@ -99,11 +142,21 @@ def page(resource):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title} | ArquiFusionCorp</title>
 <link rel="stylesheet" href="/dashboard.css">
+<script src="/table-sort.js" defer></script>
 </head>
 <body>
-<aside><div class="brand">ArquiFusionCorp</div><nav aria-label="Principal">{nav}</nav></aside>
-<main><header><div><p>Monitoreo de flota</p><h1>{title}</h1></div>
-<span class="environment">Datos simulados · {TENANT}</span></header>
+<aside>
+  <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">A</span>ArquiFusionCorp</a>
+  <nav aria-label="Principal">{nav}</nav>
+</aside>
+<main>
+  <header>
+    <div><p>Monitoreo de flota</p><h1>{title}</h1></div>
+    <div class="header-actions">
+      <span class="environment">Organización de prueba: {DEMO_TENANT} · Datos simulados</span>
+      <form method="post" action="/auth/logout"><button class="button" type="submit">Cerrar sesión</button></form>
+    </div>
+  </header>
 {content}
 </main>
 </body>
@@ -111,19 +164,65 @@ def page(resource):
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
+    def redirect(self, location, *cookies):
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for item in cookies:
+            self.send_header("Set-Cookie", item)
+        self.end_headers()
+
+    def log_request(self, code="-", size="-"):
+        if urlsplit(self.path).path != "/auth/callback":
+            super().log_request(code, size)
+
+    def do_POST(self):
+        if urlsplit(self.path).path != "/auth/logout":
+            self.send_error(404)
+            return
+        if self.headers.get("Origin") != cognito_login.SIGNED_OUT_URL.rstrip("/"):
+            self.send_error(403)
+            return
+        self.redirect(
+            cognito_login.sign_out_url(),
+            cognito_login.cookie(cognito_login.SESSION_COOKIE, "", 0),
+            cognito_login.cookie(cognito_login.FLOW_COOKIE, "", 0),
+        )
+
     def do_GET(self):
-        resource = urlsplit(self.path).path.strip("/")
-        if resource == "dashboard.css":
-            content = (ROOT / "dashboard.css").read_bytes()
-            kind = "text/css"
+        url = urlsplit(self.path)
+        if url.path in {"/auth/login", "/auth/signup"}:
+            if self.headers.get("Host") != "localhost:8080":
+                self.redirect(cognito_login.CALLBACK.removesuffix("/auth/callback") + url.path)
+                return
+            self.redirect(*cognito_login.start(sign_up=url.path == "/auth/signup"))
+            return
+        if url.path == "/auth/callback":
+            try:
+                session = cognito_login.complete(self.headers, parse_qs(url.query))
+            except (OSError, ValueError, KeyError, TypeError):
+                self.redirect("/", cognito_login.cookie(cognito_login.FLOW_COOKIE, "", 0))
+                return
+            self.redirect("/", session, cognito_login.cookie(cognito_login.FLOW_COOKIE, "", 0))
+            return
+        resource = url.path.strip("/")
+        signed_in = cognito_login.active(self.headers)
+        if resource in {"dashboard.css", "table-sort.js"}:
+            content = (ROOT / resource).read_bytes()
+            kind = "text/css" if resource == "dashboard.css" else "text/javascript"
         elif not resource or resource in SECTIONS:
-            content = page(resource).encode("utf-8")
+            if resource and not signed_in:
+                self.redirect("/")
+                return
+            content = (page(resource) if signed_in else public_page()).encode("utf-8")
             kind = "text/html"
         else:
             self.send_error(404)
             return
         self.send_response(200)
         self.send_header("Content-Type", f"{kind}; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)

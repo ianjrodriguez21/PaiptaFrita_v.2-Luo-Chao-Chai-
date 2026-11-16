@@ -15,9 +15,11 @@ Las listas devuelven `items` y `next_cursor`. Usa `?limit=25` y envía el cursor
 
 ## Vista local en VS Code
 
-Abre `front end` como carpeta en VS Code. Ejecuta `python3 dashboard.py` en su terminal integrada y entra a <http://127.0.0.1:8080/>. También puedes usar la configuración **Dashboard local** con la extensión Python Debugger. La vista muestra datos simulados de MINA_A y solo escucha en loopback. Para detenerla, pulsa Ctrl+C.
+Abre `front end` como carpeta en VS Code. Ejecuta `python3 dashboard.py` en su terminal integrada y entra a <http://localhost:8080/>. También puedes usar la configuración **Dashboard local** con la extensión Python Debugger. La vista muestra datos simulados de MINA_A y solo escucha en loopback. Para detenerla, pulsa Ctrl+C.
 
-La navegación local incluye resumen, máquinas, incidentes, técnicos y repuestos. Las secciones leen `mocks/operaciones.json`. Quedan pendientes Cognito, el servicio de datos por API Gateway, los indicadores de utilización y predicción y las vistas de detalle e historial.
+La navegación local incluye resumen, máquinas, incidentes, técnicos y repuestos. Las secciones leen `mocks/operaciones.json`. Quedan pendientes el servicio de datos por API Gateway, los indicadores de utilización y predicción y las vistas de detalle e historial.
+
+Para probar autenticación, inicia el servidor en el puerto 8080 y abre la URL con el host `localhost`. Usa **Iniciar sesión** con una cuenta del User Pool o **Crear cuenta** con un correo al que tengas acceso. Cognito debe permitir autorregistro y tener registrado `http://localhost:8080/auth/callback`. Para usar otro User Pool, configura `COGNITO_LOGIN_DOMAIN` y `COGNITO_CLIENT_ID` antes de iniciar el servidor.
 
 ## Datos de prueba
 
@@ -31,7 +33,7 @@ Las rutas de la tabla siguen el esquema del equipo. En la integración de `/mach
 - Protege cada ruta con el autorizador JWT de API Gateway y Cognito. Los handlers esperan `sub` y `custom:tenant_id` en los claims validados. Si el equipo usa access tokens, confirma que Cognito emita el claim de tenant en ese token. La asignación de tenant debe estar controlada por el servidor y fuera de los atributos editables por los usuarios. Las consultas usan ese claim como clave de partición.
 - Configura las variables de entorno con los nombres físicos del stage. Para el dashboard agrega `UTILIZATION_TABLE_NAME` (`UtilizacionTable`), `EFFICACY_TABLE_NAME` (`EficaciaTable`) y `PREDICTIONS_TABLE_NAME` (`PrediccionRepuestosTable`).
 - Otorga al rol de ejecución `dynamodb:Query` sobre las tablas consultadas y `dynamodb:GetItem` sobre la tabla de máquinas para el detalle. Antes de exponer las rutas, valida la matriz de roles y los campos que puede ver cada rol. Esta primera versión aplica aislamiento por organización y limita los campos devueltos para técnicos.
-- Empieza la autenticación con la interfaz de inicio de sesión de Cognito y define el aprovisionamiento de usuarios y sus roles de acuerdo con el esquema del equipo. Crear usuarios, el inicio de sesión, la interfaz web y el despliegue quedan pendientes.
+- El login y el registro funcionan en la vista local con el cliente público de Cognito configurado. El despliegue del dashboard, las rutas de API y el aprovisionamiento de perfiles operativos siguen pendientes.
 
 ## Subir a main
 
@@ -40,7 +42,21 @@ Desde la raíz de tu clon y con permisos de escritura, revisa `git status --shor
 ```bash
 git pull --ff-only origin main
 git add -- "front end"
-git diff --cached --name-only
+git --no-pager diff --cached --name-only
 ```
 
 Verifica que el diff muestre únicamente archivos de `front end/`. Después ejecuta `git commit -m "Add dashboard query Lambdas"` y `git push origin main`.
+
+## Alta de perfiles
+
+Con el registro por cuenta propia habilitado en Cognito, el dashboard local ofrece **Crear cuenta** junto a **Iniciar sesión**. Cognito recibe el correo y la contraseña y verifica el correo. Las cuentas nuevas carecen de una organización asignada. Los datos del dashboard local siguen siendo simulados.
+
+La Lambda `CrearUsuario` que se incluye corresponde al alta administrativa de perfiles. El alta automática del perfil pendiente tras el primer login todavía requiere implementación.
+
+Para activar el guardado, define `t_users` con claves String `tenant_id` y `user_id`, configura `USERS_TABLE_NAME` y `TECHNICIANS_TABLE_NAME`, y registra `POST /users` con el handler `frontend_lambdas.CrearUsuario.lambda_handler` y el mismo autorizador JWT de las consultas. El rol de ejecución necesita permisos para las operaciones `dynamodb:ConditionCheckItem` y `dynamodb:PutItem` que ejecuta la transacción. Crea el primer perfil administrador activo de la organización de forma controlada con su `sub` de Cognito. La Lambda comprueba ese perfil en la misma transacción que registra al usuario.
+
+Antes de habilitar la ruta, configura el mapeo de `custom:tenant_id` para el token validado y la verificación de que el `sub` y correo ingresados corresponden a una cuenta del mismo tenant. La ruta de alta administrativa permanece pendiente de integración.
+
+## Cerrar sesión
+
+En el cliente público `dashboard-web` de Cognito agrega `http://localhost:8080/` a las URL de cierre de sesión permitidas. El botón **Cerrar sesión** borra la sesión de la app y redirige al cierre de Cognito, que devuelve al usuario a esa URL. Las rutas del dashboard local requieren una sesión. El acceso a datos reales se controla por separado en la API.
