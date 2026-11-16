@@ -1,6 +1,11 @@
 # ArquiFusionCorp
 ## Sistema Inteligente de Monitoreo y Mantenimiento Predictivo Industrial
 
+# Integrantes
+- Ian Jesus Rodriguez Santayana (Seccion 1)
+- Tommy Bryan Loo Leon (Seccion 3)
+- Vannia Fatima Curay Mauricio (Seccion 1)
+
 ### Descripción del proyecto
 
 **ArquiFusionCorp** es un proyecto de monitoreo inteligente y mantenimiento predictivo de maquinaria industrial que busca mejorar la eficiencia, seguridad y continuidad de las operaciones.
