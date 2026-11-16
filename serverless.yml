@@ -15,7 +15,6 @@ params:
 plugins:
   - serverless-step-functions
 
-
 # ====================================
 # PROVEEDOR AWS
 # ====================================
@@ -131,7 +130,6 @@ functions:
 
   obtenerTelemetria:
     name: ${self:service}-${sls:stage}-obtenerTelemetria
-
     handler: telemetria.ObtenerTelemetria.lambda_handler
     timeout: 25
 
@@ -252,17 +250,20 @@ functions:
   # INTEGRACION AWS - AZURE
   # ==================================
 
-  
   replicarS3Azure:
     name: ${self:service}-${sls:stage}-replicarS3Azure
     handler: telemetria.IntegracionAzure.ReplicarS3Azure.lambda_handler
     timeout: 120
     memorySize: 256
 
+    # El secreto se obtiene desde AWS Secrets Manager
     environment:
-      AZURE_SECRET_NAME: arquifusioncorp/dev/azure-blob
+      AZURE_SECRET_NAME: arquifusioncorp/${sls:stage}/azure-blob
 
+    # Replicacion automatica mediante EventBridge
     events:
+
+      # TELEMETRIA
       - eventBridge:
           pattern:
             source:
@@ -277,6 +278,7 @@ functions:
                 key:
                   - prefix: 'telemetria/'
 
+      # ANALISIS HISTORICO
       - eventBridge:
           pattern:
             source:
@@ -290,7 +292,6 @@ functions:
               object:
                 key:
                   - prefix: 'analisis-historico/'
-
 
 # ====================================
 # STEP FUNCTIONS
