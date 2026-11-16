@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from cognito_login import CLIENT_ID, DOMAIN
-from dashboard import ROOT, SECTIONS, page, public_page
+from dashboard import DASHBOARD_ROUTES, ROOT, page, public_page
 
 OUTPUT = ROOT.parent / "amplify-dist"
 
@@ -29,11 +29,11 @@ def build():
     )
     (OUTPUT / "index.html").write_text(public, encoding="utf-8")
 
-    for resource in ("", *SECTIONS):
+    for resource in DASHBOARD_ROUTES:
         document = with_auth(page(resource)).replace("<body>", '<body hidden data-dashboard>')
         document = document.replace('href=\'/\'', "href='/dashboard.html'")
         document = document.replace('class="brand" href="/"', 'class="brand" href="/dashboard.html"')
-        for section in SECTIONS:
+        for section in DASHBOARD_ROUTES[1:]:
             document = document.replace(f"href='/{section}'", f"href='/{section}.html'")
         document = document.replace('method="post" action="/auth/logout"', 'data-auth-logout')
         filename = f"{resource or 'dashboard'}.html"

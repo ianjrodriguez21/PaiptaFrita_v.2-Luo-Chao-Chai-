@@ -154,3 +154,12 @@ body[data-dashboard][hidden] { display: none; }
 .severity-panel { margin-top: 16px; }
 .severity-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .severity-totals li { display: flex; justify-content: space-between; gap: 8px; color: var(--severity); border-bottom: 2px solid currentColor; padding: 5px 4px; }
+
+.demo-views { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; }
+.demo-views span { color: var(--muted); font-size: .85rem; margin-right: 5px; }
+.demo-views a.button { border: 1px solid var(--line); }
+.demo-views a[aria-current] { border-color: var(--accent); }
+.telemetry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 10px; margin-bottom: 0; }
+.telemetry-grid div { padding: 10px; border: 1px solid var(--line); border-radius: 7px; }
+.telemetry-grid dt { color: var(--muted); font-size: .8rem; }
+.telemetry-grid dd { margin: 0; font-weight: 700; }

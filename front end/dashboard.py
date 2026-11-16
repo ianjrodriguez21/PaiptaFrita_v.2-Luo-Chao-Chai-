@@ -31,6 +31,8 @@ SECTIONS = {
     }),
 }
 DEMO_TENANT = "MINA_A"
+TECHNICIAN_VIEW = "technician-demo"
+DASHBOARD_ROUTES = ("", *SECTIONS, TECHNICIAN_VIEW)
 
 
 def display(value):
@@ -134,6 +136,38 @@ def overview(data):
     )
 
 
+def technician_view(data):
+    active = [row for row in data["incidents"] if row.get("status") != "resolved"]
+    incident = min(active, key=incident_priority, default=None)
+    if incident is None:
+        return '<section class="panel"><h2>Incidente prioritario</h2><p>No hay incidentes activos.</p></section>'
+
+    machine_id = incident.get("machine_id")
+    machine = next((row for row in data["machines"] if row.get("machine_id") == machine_id), None)
+    if machine:
+        measurements = {
+            "Latitud": machine.get("latitude"), "Longitud": machine.get("longitude"),
+            "Temperatura": machine.get("temperature"), "Vibración": machine.get("vibration"),
+            "Presión": machine.get("pressure"), "Combustible (%)": machine.get("fuel_level_percentage"),
+            "Horas de uso": machine.get("operating_hours"),
+        }
+        details = "".join(
+            f"<div><dt>{label}</dt><dd>{display(value)}</dd></div>"
+            for label, value in measurements.items()
+        )
+        telemetry = (
+            f'<p>Última lectura: {display(machine.get("timestamp"))}</p>'
+            f'<dl class="telemetry-grid">{details}</dl>'
+        )
+    else:
+        telemetry = '<p>La telemetría de esta máquina no está disponible.</p>'
+    return (
+        '<section class="priority-panel"><h2>Incidente prioritario</h2>'
+        f'{incident_cards([incident])}</section>'
+        f'<section class="panel"><h2>Ubicación y telemetría</h2>{telemetry}</section>'
+    )
+
+
 def public_page():
     return """<!doctype html>
 <html lang="es">
@@ -164,12 +198,27 @@ def page(resource):
     source = json.loads((ROOT / "mocks" / "operaciones.json").read_text(encoding="utf-8"))
     data = {key: [row for row in source[key] if row.get("tenant_id") == DEMO_TENANT] for key in SECTIONS}
     links = {"": "Resumen", **{key: value[0] for key, value in SECTIONS.items()}}
+    is_technician = resource == TECHNICIAN_VIEW
+    if is_technician:
+        links = {TECHNICIAN_VIEW: "Incidente prioritario"}
     nav = "".join(
         f"<a href='/{key}'{' aria-current=page' if key == resource else ''}>{label}</a>"
         for key, label in links.items()
     )
-    title = links[resource]
-    content = section(resource, data) if resource else overview(data)
+    if is_technician:
+        title = "Ficha del técnico"
+        content = technician_view(data)
+    else:
+        title = links[resource]
+        content = section(resource, data) if resource else overview(data)
+    demo_views = "".join(
+        f"<a class='button' href='/{route}'"
+        f"{' aria-current=page' if selected else ''}>{label}</a>"
+        for route, label, selected in (
+            ("", "Supervisor", not is_technician),
+            (TECHNICIAN_VIEW, "Técnico", is_technician),
+        )
+    )
     return f"""<!doctype html>
 <html lang="es">
 <head>
@@ -181,7 +230,7 @@ def page(resource):
 </head>
 <body>
 <aside>
-  <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">A</span>ArquiFusionCorp</a>
+  <a class="brand" href='/{TECHNICIAN_VIEW if is_technician else ""}'><span class="brand-mark" aria-hidden="true">A</span>ArquiFusionCorp</a>
   <nav aria-label="Principal">{nav}</nav>
 </aside>
 <main>
@@ -192,6 +241,9 @@ def page(resource):
       <form method="post" action="/auth/logout"><button class="button" type="submit">Cerrar sesión</button></form>
     </div>
   </header>
+  <nav class="demo-views" aria-label="Vista de demo">
+    <span>Vista de demo</span>{demo_views}
+  </nav>
 {content}
 </main>
 </body>
@@ -246,7 +298,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if resource in {"dashboard.css", "table-sort.js"}:
             content = (ROOT / resource).read_bytes()
             kind = "text/css" if resource == "dashboard.css" else "text/javascript"
-        elif not resource or resource in SECTIONS:
+        elif resource in DASHBOARD_ROUTES:
             if resource and not signed_in:
                 self.redirect("/")
                 return
