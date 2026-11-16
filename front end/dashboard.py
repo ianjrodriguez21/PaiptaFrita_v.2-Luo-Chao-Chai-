@@ -71,6 +71,38 @@ def section(resource, data):
     return f"<section class='panel'><h2>{title}</h2>{table(data[resource], columns)}</section>"
 
 
+SEVERITIES = {"critical": "Crítica", "high": "Alta", "medium": "Media", "low": "Baja"}
+INCIDENT_STATES = {"open": "Abierto", "assigned": "Asignado", "in_progress": "En atención"}
+INCIDENT_TYPES = {"abnormal_vibration": "Vibración anormal"}
+
+
+def incident_priority(incident):
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    score = incident.get("risk_score")
+    return severity_order.get(incident.get("severity"), 4), -score if isinstance(score, (int, float)) else 0
+
+
+def incident_cards(incidents):
+    cards = []
+    for incident in sorted(incidents, key=incident_priority)[:3]:
+        severity = incident.get("severity")
+        label = SEVERITIES.get(severity, "Sin clasificar")
+        state = INCIDENT_STATES.get(incident.get("status"), incident.get("status"))
+        event = incident.get("incident_type")
+        detection = display(INCIDENT_TYPES.get(event, event))
+        cards.append(
+            f'<article class="priority-card severity-{severity if severity in SEVERITIES else "unknown"}">'
+            f'<div class="priority-meta"><span class="severity-label">{label}</span>'
+            f'<span>{display(state)}</span></div>'
+            f'<h3>{display(incident.get("machine_id"))}</h3>'
+            f'<p>{detection}</p>'
+            f'<dl><div><dt>Incidente</dt><dd>{display(incident.get("incident_id"))}</dd></div>'
+            f'<div><dt>Puntaje de riesgo</dt><dd>{display(incident.get("risk_score"))}</dd></div></dl>'
+            '</article>'
+        )
+    return "".join(cards) or '<p class="empty">No hay incidentes activos.</p>'
+
+
 def overview(data):
     unresolved = [row for row in data["incidents"] if row.get("status") != "resolved"]
     affected = {row["machine_id"] for row in unresolved if row.get("machine_id")}
@@ -86,16 +118,19 @@ def overview(data):
         f"<article class='metric'><span>{label}</span><strong>{value}</strong></article>"
         for label, value in cards.items()
     )
-    severities = [
-        {"severity": label, "count": sum(row.get("severity") == key for row in unresolved)}
-        for key, label in [("critical", "Crítica"), ("high", "Alta"), ("medium", "Media"), ("low", "Baja")]
-    ]
-    breakdown = table(severities, {"severity": "Severidad", "count": "Cantidad"})
+    severities = "".join(
+        f'<li class="severity-{key}"><span>{label}</span>'
+        f'<strong>{sum(row.get("severity") == key for row in unresolved)}</strong></li>'
+        for key, label in SEVERITIES.items()
+    )
     return (
-        f"<div class='metrics'>{metrics}</div>"
-        f"<div class='overview-grid'><section class='panel'><h2>Incidentes activos por severidad</h2>{breakdown}</section>"
-        + section("incidents", data)
-        + "</div>"
+        '<section class="priority-panel" aria-labelledby="priority-title">'
+        '<div class="priority-heading"><h2 id="priority-title">Incidentes que requieren atención</h2>'
+        "<a class='button' href='/incidents'>Ver todos los incidentes</a></div>"
+        f'<div class="priority-grid">{incident_cards(unresolved)}</div></section>'
+        f'<div class="metrics">{metrics}</div>'
+        '<section class="panel severity-panel"><h2>Incidentes activos por severidad</h2>'
+        f'<ul class="severity-totals">{severities}</ul></section>'
     )
 
 
