@@ -240,6 +240,20 @@ functions:
           name: ${self:service}-${sls:stage}-prediccion
           rate: rate(7 days)
           enabled: false
+  
+  # ==================================
+  # INTEGRACION AWS - AZURE
+  # ==================================
+
+  replicarS3Azure:
+    name: ${self:service}-${sls:stage}-replicarS3Azure
+    handler: IntegracionAzure.ReplicarS3Azure.lambda_handler
+    timeout: 120
+    memorySize: 256
+
+    environment:
+      AZURE_SECRET_NAME: arquifusioncorp/dev/azure-blob
+
 
 # ====================================
 # STEP FUNCTIONS
