@@ -60,3 +60,9 @@ Antes de habilitar la ruta, configura el mapeo de `custom:tenant_id` para el tok
 ## Cerrar sesión
 
 En el cliente público `dashboard-web` de Cognito agrega `http://localhost:8080/` a las URL de cierre de sesión permitidas. El botón **Cerrar sesión** borra la sesión de la app y redirige al cierre de Cognito, que devuelve al usuario a esa URL. Las rutas del dashboard local requieren una sesión. El acceso a datos reales se controla por separado en la API.
+
+## Publicar la demo en Amplify
+
+Conecta el repositorio y la rama `main` en Amplify, con la raíz del repo como directorio de compilación. `amplify.yml` ejecuta `python3 "front end/build_amplify.py"` y publica solo `amplify-dist`. Este build usa los datos simulados incluidos en el repositorio. El HTML resultante es público y no debe contener datos reales. La comprobación de sesión del navegador sirve para la navegación de la demo. Los datos reales deberán venir de una API con autorización del lado del servidor.
+
+En el cliente de aplicación de Cognito agrega `https://main.d2pegxgyu22777.amplifyapp.com/` como URL de devolución de llamada y como URL de cierre de sesión permitida. Conserva las dos URL de localhost para el servidor Python. El build acepta `COGNITO_LOGIN_DOMAIN` y `COGNITO_CLIENT_ID` como variables de Amplify para cambiar de User Pool. Usa el cliente público sin secreto con Authorization Code + PKCE.
