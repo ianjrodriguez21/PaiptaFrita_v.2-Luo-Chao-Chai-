@@ -247,7 +247,7 @@ functions:
 
   replicarS3Azure:
     name: ${self:service}-${sls:stage}-replicarS3Azure
-    handler: IntegracionAzure.ReplicarS3Azure.lambda_handler
+    handler: telemetria.IntegracionAzure.ReplicarS3Azure.lambda_handler
     timeout: 120
     memorySize: 256
 
