@@ -1,9 +1,15 @@
 Resources:
 
+  # ====================================
+  # S3 - TELEMETRIA
+  # ====================================
+
   TelemetryBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: ${self:service}-${sls:stage}-${aws:accountId}-${aws:region}-telemetry
+
+      # Activar eventos S3 hacia EventBridge
       NotificationConfiguration:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
@@ -33,7 +39,6 @@ Resources:
             AbortIncompleteMultipartUpload:
               DaysAfterInitiation: 7
 
-
   # ====================================
   # S3 - ANALISIS HISTORICO
   # ====================================
@@ -42,6 +47,11 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: ${self:service}-${sls:stage}-${aws:accountId}-${aws:region}-historical-analysis
+
+      # Activar eventos S3 hacia EventBridge
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
 
       VersioningConfiguration:
         Status: Enabled
