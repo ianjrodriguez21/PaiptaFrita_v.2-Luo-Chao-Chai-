@@ -1,0 +1,10 @@
+version: 1
+frontend:
+  phases:
+    build:
+      commands:
+        - python3 "front end/build_amplify.py"
+  artifacts:
+    baseDirectory: amplify-dist
+    files:
+      - '**/*'
