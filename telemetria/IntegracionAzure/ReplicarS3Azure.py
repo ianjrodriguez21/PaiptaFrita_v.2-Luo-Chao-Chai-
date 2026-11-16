@@ -111,6 +111,30 @@ def upload_to_azure(
 
 
 def lambda_handler(event, context):
+
+    # Adaptar eventos de EventBridge al formato S3
+    if (
+        event.get("source") == "aws.s3"
+        and event.get("detail-type") == "Object Created"
+    ):
+        detail = event["detail"]
+
+        event = {
+            "Records": [{
+                "eventSource": "aws:s3",
+                "s3": {
+                    "bucket": {
+                        "name": detail["bucket"]["name"]
+                    },
+                    "object": {
+                        "key": detail["object"]["key"],
+                        "versionId": detail["object"].get("version-id")
+                    }
+                },
+                "fromEventBridge": True
+            }]
+        }
+
     config = None
     token = None
     copied = 0
@@ -122,9 +146,13 @@ def lambda_handler(event, context):
             continue
 
         bucket = record["s3"]["bucket"]["name"]
-        key = unquote_plus(
-            record["s3"]["object"]["key"]
-        )
+        raw_key = record["s3"]["object"]["key"]
+
+        if record.get("fromEventBridge"):
+            key = raw_key
+        else:
+            key = unquote_plus(raw_key)
+
 
         destination = resolve_destination(bucket, key)
 

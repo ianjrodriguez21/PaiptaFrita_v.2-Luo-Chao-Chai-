@@ -4,6 +4,9 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: ${self:service}-${sls:stage}-${aws:accountId}-${aws:region}-telemetry
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
 
       VersioningConfiguration:
         Status: Enabled

@@ -252,6 +252,7 @@ functions:
   # INTEGRACION AWS - AZURE
   # ==================================
 
+  
   replicarS3Azure:
     name: ${self:service}-${sls:stage}-replicarS3Azure
     handler: telemetria.IntegracionAzure.ReplicarS3Azure.lambda_handler
@@ -260,6 +261,36 @@ functions:
 
     environment:
       AZURE_SECRET_NAME: arquifusioncorp/dev/azure-blob
+
+    events:
+      - eventBridge:
+          pattern:
+            source:
+              - aws.s3
+            detail-type:
+              - Object Created
+            detail:
+              bucket:
+                name:
+                  - ${self:service}-${sls:stage}-${aws:accountId}-${aws:region}-telemetry
+              object:
+                key:
+                  - prefix: 'telemetria/'
+
+      - eventBridge:
+          pattern:
+            source:
+              - aws.s3
+            detail-type:
+              - Object Created
+            detail:
+              bucket:
+                name:
+                  - ${self:service}-${sls:stage}-${aws:accountId}-${aws:region}-historical-analysis
+              object:
+                key:
+                  - prefix: 'analisis-historico/'
+
 
 # ====================================
 # STEP FUNCTIONS
