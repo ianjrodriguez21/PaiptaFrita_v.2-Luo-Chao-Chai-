@@ -1,29 +1,13 @@
 
-"""
-Lambda: ReplicarS3Azure
-
-Copia JSON desde S3 a Azure Blob Storage.
-
-Origen:
-  Bucket S3 de telemetria, prefijo telemetria/
-  Bucket S3 historico, prefijo analisis-historico/
-
-Destino:
-  Azure container telemetria
-  Azure container analisis-historico
-
-Credenciales:
-  AWS Secrets Manager
-"""
-
 import json
 import logging
 import os
-from urllib.parse import unquote_plus
+from datetime import datetime, timezone
+from email.utils import format_datetime
+from urllib.parse import quote, unquote_plus, urlencode
+from urllib.request import Request, urlopen
 
 import boto3
-from azure.identity import ClientSecretCredential
-from azure.storage.blob import BlobServiceClient, ContentSettings
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -36,27 +20,41 @@ TELEMETRY_BUCKET = os.environ["S3_BUCKET_NAME"]
 ANALYSIS_BUCKET = os.environ["ANALYSIS_BUCKET_NAME"]
 
 
-def get_azure_client():
+def get_config():
     response = secrets.get_secret_value(
         SecretId=SECRET_NAME
     )
+    return json.loads(response["SecretString"])
 
-    config = json.loads(response["SecretString"])
 
-    credential = ClientSecretCredential(
-        tenant_id=config["AZURE_TENANT_ID"],
-        client_id=config["AZURE_CLIENT_ID"],
-        client_secret=config["AZURE_CLIENT_SECRET"]
+def get_access_token(config):
+    url = (
+        "https://login.microsoftonline.com/"
+        f"{quote(config['AZURE_TENANT_ID'], safe='')}"
+        "/oauth2/v2.0/token"
     )
 
-    account_name = config["AZURE_STORAGE_ACCOUNT"]
+    payload = urlencode({
+        "client_id": config["AZURE_CLIENT_ID"],
+        "client_secret": config["AZURE_CLIENT_SECRET"],
+        "scope": "https://storage.azure.com/.default",
+        "grant_type": "client_credentials"
+    }).encode("utf-8")
 
-    return BlobServiceClient(
-        account_url=(
-            f"https://{account_name}.blob.core.windows.net"
-        ),
-        credential=credential
+    request = Request(
+        url,
+        data=payload,
+        headers={
+            "Content-Type":
+                "application/x-www-form-urlencoded"
+        },
+        method="POST"
     )
+
+    with urlopen(request, timeout=20) as response:
+        result = json.load(response)
+
+    return result["access_token"]
 
 
 def resolve_destination(bucket, key):
@@ -64,10 +62,7 @@ def resolve_destination(bucket, key):
         bucket == TELEMETRY_BUCKET
         and key.startswith("telemetria/")
     ):
-        return (
-            "telemetria",
-            key.removeprefix("telemetria/")
-        )
+        return "telemetria", key[len("telemetria/"):]
 
     if (
         bucket == ANALYSIS_BUCKET
@@ -75,87 +70,111 @@ def resolve_destination(bucket, key):
     ):
         return (
             "analisis-historico",
-            key.removeprefix("analisis-historico/")
+            key[len("analisis-historico/"):]
         )
 
     return None
 
 
+def upload_to_azure(
+    account, token, container, blob_name, data
+):
+    url = (
+        f"https://{account}.blob.core.windows.net/"
+        f"{container}/{quote(blob_name, safe='/')}"
+    )
+
+    now = format_datetime(
+        datetime.now(timezone.utc),
+        usegmt=True
+    )
+
+    request = Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "x-ms-version": "2023-11-03",
+            "x-ms-date": now,
+            "x-ms-blob-type": "BlockBlob",
+            "Content-Type": "application/json",
+            "Content-Length": str(len(data))
+        },
+        method="PUT"
+    )
+
+    with urlopen(request, timeout=60) as response:
+        if response.status != 201:
+            raise RuntimeError(
+                "Azure no confirmo la creacion del blob"
+            )
+
+
 def lambda_handler(event, context):
-    azure = None
+    config = None
+    token = None
     copied = 0
     skipped = 0
 
-    try:
-        for record in event.get("Records", []):
-            if record.get("eventSource") != "aws:s3":
-                skipped += 1
-                continue
+    for record in event.get("Records", []):
+        if record.get("eventSource") != "aws:s3":
+            skipped += 1
+            continue
 
-            bucket = record["s3"]["bucket"]["name"]
-            key = unquote_plus(
-                record["s3"]["object"]["key"]
-            )
+        bucket = record["s3"]["bucket"]["name"]
+        key = unquote_plus(
+            record["s3"]["object"]["key"]
+        )
 
-            destination = resolve_destination(
-                bucket, key
-            )
+        destination = resolve_destination(bucket, key)
 
-            if not destination or not key.endswith(".json"):
-                logger.info(
-                    "Objeto ignorado: %s/%s",
-                    bucket, key
-                )
-                skipped += 1
-                continue
+        if not destination or not key.endswith(".json"):
+            skipped += 1
+            continue
 
-            container_name, blob_name = destination
+        container, blob_name = destination
 
-            if not blob_name:
-                skipped += 1
-                continue
+        if not blob_name:
+            skipped += 1
+            continue
 
-            if azure is None:
-                azure = get_azure_client()
+        if config is None:
+            config = get_config()
+            token = get_access_token(config)
 
-            # Leer exactamente el contenido del objeto S3
-            s3_object = s3.get_object(
-                Bucket=bucket,
-                Key=key
-            )
-
-            data = s3_object["Body"].read()
-
-            # Copiar a Azure sin alterar el JSON
-            blob = azure.get_blob_client(
-                container=container_name,
-                blob=blob_name
-            )
-
-            blob.upload_blob(
-                data,
-                overwrite=True,
-                content_settings=ContentSettings(
-                    content_type="application/json"
-                )
-            )
-
-            copied += 1
-
-            logger.info(
-                "Copiado a Azure: %s/%s",
-                container_name,
-                blob_name
-            )
-
-        return {
-            "status": "completed",
-            "copied": copied,
-            "skipped": skipped
+        params = {
+            "Bucket": bucket,
+            "Key": key
         }
 
-    except Exception:
-        logger.exception(
-            "Error replicando objetos S3 hacia Azure"
+        # Leer la version exacta cuando S3 la informa
+        version_id = record["s3"]["object"].get(
+            "versionId"
         )
-        raise
+
+        if version_id:
+            params["VersionId"] = version_id
+
+        response = s3.get_object(**params)
+        data = response["Body"].read()
+
+        upload_to_azure(
+            config["AZURE_STORAGE_ACCOUNT"],
+            token,
+            container,
+            blob_name,
+            data
+        )
+
+        copied += 1
+        logger.info(
+            "Replicado correctamente: %s/%s",
+            container,
+            blob_name
+        )
+
+    return {
+        "status": "completed",
+        "copied": copied,
+        "skipped": skipped
+    }

@@ -15,14 +15,6 @@ params:
 plugins:
   - serverless-step-functions
 
-# ====================================
-# DEPENDENCIAS PYTHON AUTOMATICAS
-# ====================================
-
-custom:
-  pythonRequirements:
-    dockerizePip: false
-    slim: true
 
 # ====================================
 # PROVEEDOR AWS
@@ -262,13 +254,7 @@ functions:
 
   replicarS3Azure:
     name: ${self:service}-${sls:stage}-replicarS3Azure
-
-    # El modulo contiene el requirements.txt
-    module: telemetria/IntegracionAzure
-
-    # La ruta del modulo ya se indica arriba
-    handler: ReplicarS3Azure.lambda_handler
-
+    handler: telemetria.IntegracionAzure.ReplicarS3Azure.lambda_handler
     timeout: 120
     memorySize: 256
 
