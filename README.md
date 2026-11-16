@@ -1,273 +1,169 @@
-# PaiptaFrita_v.2-Luo-Chao-Chai-
-# ArquiFusionCorp — Monitoreo inteligente y mantenimiento predictivo
+# ArquiFusionCorp
+## Sistema Inteligente de Monitoreo y Mantenimiento Predictivo Industrial
 
-> **Estado:** prototipo en desarrollo para hackathon. Arquitectura serverless multicloud propuesta; no todos los componentes están desplegados ni integrados.
+### Descripción del proyecto
 
-## Descripción
+**ArquiFusionCorp** es un proyecto de monitoreo inteligente y mantenimiento predictivo de maquinaria industrial que busca mejorar la eficiencia, seguridad y continuidad de las operaciones.
 
-**ArquiFusionCorp** es una plataforma propuesta para monitorear maquinaria industrial, detectar anomalías, anticipar mantenimientos y apoyar la gestión de incidentes, técnicos y repuestos. El sistema está pensado para múltiples organizaciones (`tenant_id`) de sectores como minería, construcción, infraestructura, agricultura y energía.
+Está orientado a empresas de sectores como minería, construcción, agricultura, infraestructura y energía, donde el funcionamiento adecuado de los equipos es fundamental para la productividad.
 
-Su arquitectura prioriza **AWS** para ingesta, procesamiento y operación, y plantea **Google Cloud BigQuery** para consultas analíticas sobre datos históricos almacenados en **Amazon S3**.
+El proyecto aprovecha los datos generados por las máquinas para identificar comportamientos anormales, anticipar posibles fallas y proporcionar información que facilite la toma de decisiones sobre el mantenimiento.
 
-**Repositorio:** https://github.com/ianjrodriguez21/PaiptaFrita_v.2-Luo-Chao-Chai-
+### Finalidad del proyecto
 
-## Problemas que buscamos resolver
+La finalidad principal de **ArquiFusionCorp** es reducir las fallas inesperadas de la maquinaria industrial mediante la detección temprana de anomalías y la evaluación de riesgos operativos.
 
-- Fallas inesperadas y detección tardía de anomalías de temperatura, vibración, presión y combustible.
-- Incidentes sin una clasificación clara por gravedad y riesgo.
-- Mantenimiento reactivo y poca utilización del historial de cada máquina.
-- Asignaciones ineficientes de técnicos según ubicación, especialidad y disponibilidad.
-- Falta o exceso de repuestos y escasa trazabilidad de intervenciones.
-- Maquinaria infrautilizada o sobrecargada y comunicación deficiente entre roles.
+En lugar de depender únicamente del mantenimiento correctivo, el proyecto busca fomentar estrategias preventivas y predictivas que permitan actuar antes de que ocurran averías graves.
 
-## Objetivos del prototipo
+De esta manera, se pretende disminuir los tiempos de inactividad, optimizar los recursos disponibles, prolongar la vida útil de los equipos y mejorar la seguridad de las operaciones.
 
-1. Recibir y conservar telemetría por organización y máquina.
-2. Detectar comportamientos anómalos con un modelo de ML y reglas operativas.
-3. Analizar patrones entre máquinas y tendencias históricas.
-4. Calcular riesgo y recomendar mantenimiento preventivo, predictivo o correctivo.
-5. Orquestar decisiones mediante AWS Step Functions y gestionar incidentes.
-6. Analizar el histórico con consultas SQL en Google BigQuery, sin duplicación obligatoria de los datos de S3.
-7. Diseñar la solución para alta disponibilidad en dos regiones de AWS; **pendiente de implementación y pruebas**.
+### Objetivos principales
 
-## Arquitectura objetivo
+- **Monitoreo de maquinaria:** supervisar variables operativas como temperatura, vibración, presión y horas de funcionamiento.
+- **Detección de anomalías:** identificar comportamientos inusuales que puedan indicar posibles problemas.
+- **Predicción de fallas:** analizar patrones de funcionamiento para anticipar situaciones de riesgo.
+- **Recomendaciones de mantenimiento:** proporcionar información para planificar intervenciones preventivas y correctivas.
+- **Gestión de incidentes:** facilitar el seguimiento de problemas detectados.
+- **Optimización de recursos:** apoyar la administración de técnicos, repuestos e intervenciones.
+- **Análisis histórico:** conservar información operativa para evaluar tendencias y mejorar las decisiones.
+- **Gestión de múltiples organizaciones:** permitir el seguimiento de equipos pertenecientes a diferentes empresas.
 
-```mermaid
-flowchart TD
-    A[Maquinaria / sensores] --> B[Amazon API Gateway]
-    B --> C[AWS Lambda: ObtenerTelemetria]
-    C --> D[(Amazon DynamoDB)]
-    C --> E[(Amazon S3: histórico)]
-    C --> F[AWS Step Functions]
-    F --> G[Lambda: DetectarAnomalias]
-    G --> H[Amazon SageMaker Endpoint]
-    H --> G
-    G --> I[Lambda: DetectarPatrones]
-    I --> J[Lambda: AnalisisHistorico]
-    J --> K[Lambda: EvaluarIncidente]
-    K --> L{Estado de riesgo}
-    L -->|Normal| M[Continuar monitoreo]
-    L -->|Warning| N[RecomendarMantenimiento]
-    L -->|Critical| O[Flujo de incidente y atención]
-    N --> D
-    O --> D
-    O -. notificaciones propuestas .-> P[Amazon SNS]
-    E --> Q[BigLake / BigQuery Omni: conexión S3]
-    Q --> R[Google BigQuery: SQL y análisis]
-    S[Amazon EventBridge / SQS - propuestos] -. programación y desacoplamiento .-> F
-```
+### Impacto esperado
 
-> El diagrama muestra la **arquitectura planeada**, no un despliegue verificado. El flujo de Step Functions, la conexión de BigQuery y las funciones de atención de incidentes deben configurarse.
+ArquiFusionCorp busca contribuir a una gestión industrial más eficiente, reduciendo costos de mantenimiento, interrupciones inesperadas y riesgos operativos.
 
-### Servicios y responsabilidades
+El proyecto se desarrolla como un prototipo académico. Sus resultados predictivos requieren validación antes de aplicarse a decisiones críticas en entornos industriales reales.
 
-| Componente | Responsabilidad | Situación |
-| --- | --- | --- |
-| AWS Lambda (Python) | Procesamiento de telemetría, análisis y decisiones | Varias funciones con lógica escrita |
-| Amazon API Gateway | Entrada HTTP de datos de sensores | Integración prevista |
-| Amazon DynamoDB | Estados, anomalías, análisis y resultados operativos | Acceso codificado en varias Lambdas; provisionamiento pendiente de verificar |
-| Amazon S3 | Telemetría e históricos | Escritura implementada en `ObtenerTelemetria.py` |
-| Amazon SageMaker | Inferencia de anomalías y patrones | Clientes de invocación en código; endpoint/modelo pendiente de configurar y validar |
-| AWS Step Functions | Orquestación y decisiones por estado | Previsto; no se encontró definición de máquina de estados en el repositorio revisado |
-| Amazon SNS, SQS y EventBridge | Notificaciones, colas y ejecución programada | Planificados |
-| Google BigQuery + BigLake/Omni | Consultas SQL de histórico almacenado en S3 | Integración propuesta, aún no configurada |
-| Despliegue AWS en dos regiones | Alta disponibilidad y recuperación | Requisito pendiente de diseño detallado y validación |
+---
 
-## Estructura actual del repositorio
+## Despliegue del proyecto
 
-```text
-.
-├── AnalisisOperativo/
-│   ├── analizarEficacia.py
-│   ├── calcularUtilizacion.py
-│   └── predecirRepuestos.py
-├── Evaluacion de mantenimiento/
-│   ├── AnalisisHistorico.py
-│   ├── DetectarAnomalias.py
-│   ├── DetectarPatrones.py
-│   ├── EvaluarIncidente.py
-│   ├── RecomendarMantenimiento.py
-│   ├── ArchivosJASONDePrueba/
-│   └── DecidirMantenimento/
-│       ├── CerrarIncidente.py               # vacío
-│       ├── NotificarUsuario.py              # vacío
-│       ├── No/
-│       │   └── ActualizarEstado.py
-│       └── Si/
-│           ├── AsignarTecnico.py            # vacío
-│           ├── BuscarRepuestos.py           # vacío
-│           ├── CrearIncidente.py            # vacío
-│           ├── RegistrarIntervenccion.py    # vacío
-│           └── TecnicosDisponibles.py       # vacío
-├── telemetria/
-│   └── ObtenerTelemetria.py
-└── README.md
-```
+ArquiFusionCorp utiliza **Serverless Framework v4** para administrar y desplegar su infraestructura en AWS.
 
-> Los nombres se conservaron como aparecen en la rama `main` al momento de revisar el repositorio.
+El proyecto está diseñado para funcionar mediante servicios serverless, sin necesidad de utilizar Docker ni contenedores para empaquetar la integración con Azure.
 
-## Funcionalidades: implementadas vs. pendientes
+### Requisitos previos
 
-**Código con implementación inicial:**
+Para desplegar el proyecto se necesita:
 
-| Archivo | Función |
-| --- | --- |
-| `telemetria/ObtenerTelemetria.py` | Valida identificadores mínimos, añade timestamp y guarda telemetría en S3 y DynamoDB. |
-| `Evaluacion de mantenimiento/DetectarAnomalias.py` | Envía características al endpoint de SageMaker; registra anomalías en DynamoDB. |
-| `Evaluacion de mantenimiento/DetectarPatrones.py` | Busca anomalías recientes de la flota y contempla inferencia con SageMaker. |
-| `Evaluacion de mantenimiento/AnalisisHistorico.py` | Revisa tendencias e incidentes previos; guarda resultados en DynamoDB y opcionalmente S3. |
-| `Evaluacion de mantenimiento/EvaluarIncidente.py` | Combina anomalía, patrones e histórico para estimar riesgo y estado (`normal`, `warning`, `critical`). |
-| `Evaluacion de mantenimiento/RecomendarMantenimiento.py` | Genera recomendaciones por riesgo, recurrencia y horas de operación. |
-| `AnalisisOperativo/calcularUtilizacion.py` | Calcula porcentaje de tiempo operativo. |
-| `AnalisisOperativo/analizarEficacia.py` | Clasifica máquinas como normales, sobreutilizadas o infrautilizadas. |
-| `AnalisisOperativo/predecirRepuestos.py` | **Registra predicciones recibidas como entrada**; todavía no entrena ni ejecuta un modelo predictivo propio. |
-| `Evaluacion de mantenimiento/DecidirMantenimento/No/ActualizarEstado.py` | Implementación inicial de actualización de estado. |
+- Una cuenta AWS activa con credenciales válidas y permisos suficientes.
+- Node.js y Serverless Framework v4.
+- El plugin `serverless-step-functions`.
+- Acceso al repositorio de GitHub.
+- El rol IAM `LabRole`, utilizado actualmente por el proyecto.
+- Los endpoints de Amazon SageMaker requeridos para la inferencia predictiva.
+- Las credenciales de Azure configuradas de forma segura en AWS Secrets Manager para habilitar la replicación multicloud.
 
-**Archivos vacíos o módulos que aún deben completarse:** creación/cierre de incidentes, asignación de técnicos, búsqueda/reserva de repuestos, registro de intervenciones, notificaciones y endpoints del frontend. Las funciones de reserva de repuestos y consultas del frontend figuran en la planificación, pero no como módulos operativos confirmados en la estructura revisada.
+**Importante:** en una cuenta AWS diferente, `LabRole`, los endpoints de SageMaker y las credenciales de Azure no se crean automáticamente con la configuración actual. Es necesario prepararlos antes de utilizar todas las funcionalidades.
 
-## Flujo funcional propuesto
-
-1. Un sensor envía telemetría con `tenant_id` y `machine_id`.
-2. `ObtenerTelemetria` guarda la lectura en S3 (histórico) y DynamoDB.
-3. Step Functions inicia el análisis: anomalías → patrones entre máquinas → histórico → evaluación del riesgo.
-4. Según el resultado, se continúa el monitoreo, se recomienda mantenimiento o se inicia la atención de un incidente.
-5. En el flujo crítico futuro se crea el incidente, se localizan técnicos, se comprueban repuestos y se registra la intervención.
-6. Google BigQuery ejecuta consultas analíticas sobre los datos históricos de S3.
-
-## Ejemplo de telemetría
-
-```json
-{
-  "tenant_id": "MINA_A",
-  "machine_id": "MAC-102",
-  "machine_type": "excavator",
-  "latitude": -12.05,
-  "longitude": -77.03,
-  "operating_hours": 1250,
-  "temperature": 105,
-  "vibration": 8.2,
-  "pressure": 220,
-  "fuel_consumption": 32,
-  "fuel_level_liters": 204,
-  "fuel_level_percentage": 76,
-  "load_transported": 15000,
-  "speed": 5.5,
-  "engine_rpm": 1850,
-  "current_status": "operational"
-}
-```
-
-### Contratos esenciales de datos
-
-- **Maquinaria:** `tenant_id`, `machine_id`, tipo, ubicación, horas de uso y señales de sensores.
-- **Técnicos:** `tenant_id`, `technician_id`, ubicación, especialidades y disponibilidad.
-- **Repuestos:** `tenant_id`, `part_id`, cantidad, stock mínimo y almacén.
-- **Incidentes:** `incident_id`, máquina, tipo, gravedad (`low`, `medium`, `high`, `critical`), riesgo y estado (`open`, `assigned`, `in_progress`, `resolved`).
-- **Mantenimiento e historial:** fechas, técnico, partes utilizadas, diagnóstico y resultado.
-
-Se debe conservar `tenant_id` a lo largo de cada flujo y aplicar aislamiento y permisos por organización. No basta con aceptar `tenant_id` enviado por un cliente sin autenticar.
-
-## Integración AWS S3 ↔ Google Cloud BigQuery
-
-**Sí es viable:** Google Cloud permite crear tablas externas **BigLake sobre Amazon S3**, usando **BigQuery Omni** y una conexión con permisos delegados. Esto permite consultar el contenido sin copiar necesariamente todo el dataset a Google Cloud Storage.
-
-### Pasos de integración propuestos
-
-1. **Definir región y formato.** Elegir una región AWS compatible con BigQuery Omni y una región de dataset/conexión correspondiente. Revisar costos y disponibilidad regional.
-2. **Preparar datos analíticos en S3.** Usar una ruta separada, por ejemplo `s3://MI_BUCKET/analytics/telemetry/`, con archivos **JSONL** o **Parquet** y esquema consistente. Para crecer, preferir Parquet particionado.
-3. **Crear una conexión BigQuery a Amazon S3** desde Google Cloud y configurar el rol IAM de AWS con permisos mínimos de lectura (`s3:ListBucket` y `s3:GetObject`, según recursos y prefijos).
-4. **Crear dataset y tabla externa** de BigLake que apunte a la ruta S3.
-5. **Ejecutar consultas SQL** agrupando por `tenant_id`, máquina y periodo.
-6. **Verificar seguridad y costos:** identidades, ubicación de datos, transferencias, permisos y costo de consultas.
-
-**Importante sobre el código actual:** `ObtenerTelemetria.py` escribe **un objeto JSON por archivo** (`tenant_id/machine_id/timestamp_uuid.json`). Antes de crear la tabla analítica, recomendamos una etapa de normalización a **JSONL (un registro por línea)** o **Parquet** con un esquema estable y una ruta separada. No asumir que los JSON actuales ya son una tabla externa lista para consultar.
-
-Ejemplo orientativo de SQL, **después de crear una conexión y disponer de archivos JSONL**:
-
-```sql
--- Sustituir project-id, conexión, región y bucket por valores reales.
-CREATE EXTERNAL TABLE `project-id.operaciones.telemetria_s3`
-WITH CONNECTION `project-id.aws-us-east-1.s3-connection`
-OPTIONS (
-  format = 'JSONL',
-  uris = ['s3://MI_BUCKET/analytics/telemetry/*.jsonl']
-);
-```
-
-```sql
-SELECT
-  tenant_id,
-  machine_id,
-  COUNT(*) AS total_lecturas,
-  ROUND(AVG(temperature), 2) AS temperatura_media,
-  ROUND(MAX(vibration), 2) AS vibracion_maxima
-FROM `project-id.operaciones.telemetria_s3`
-WHERE tenant_id = 'MINA_A'
-GROUP BY tenant_id, machine_id
-ORDER BY temperatura_media DESC;
-```
-
-> El SQL anterior es ilustrativo: requiere una conexión BigLake válida, permisos IAM y un esquema compatible. `project-id` y `MI_BUCKET` son marcadores, **no valores configurados**.
-
-Documentación oficial:
-- [Conectar BigQuery a Amazon S3](https://docs.cloud.google.com/bigquery/docs/omni-aws-create-connection)
-- [Crear tablas BigLake en S3](https://docs.cloud.google.com/bigquery/docs/omni-aws-create-external-table)
-
-## Preparación y pruebas locales
-
-**Requisitos para trabajar con las Lambdas:** Python 3, `boto3`, acceso a una cuenta de AWS y permisos de IAM adecuados. Para un despliegue reproducible faltan por definir el archivo de infraestructura (`serverless.yml`, SAM o CDK), dependencias, roles, tablas, índices, buckets, máquina de estados y endpoint de SageMaker.
+### 1. Clonar el repositorio
 
 ```bash
 git clone https://github.com/ianjrodriguez21/PaiptaFrita_v.2-Luo-Chao-Chai-.git
 cd PaiptaFrita_v.2-Luo-Chao-Chai-
-python -m venv .venv
-source .venv/bin/activate  # En Windows: .venv\Scripts\activate
-pip install boto3
 ```
 
-Las Lambdas utilizan el handler `lambda_handler(event, context)`; por ejemplo, `ObtenerTelemetria.py` espera las variables de entorno:
+### 2. Instalar Serverless Framework
 
-| Variable | Uso |
-| --- | --- |
-| `S3_BUCKET_NAME` | Bucket del histórico de telemetría |
-| `DYNAMODB_TABLE_NAME` | Tabla de telemetría actual |
-| `SAGEMAKER_ENDPOINT` | Endpoint de inferencia requerido por las funciones de detección |
-| `ALERTS_TABLE_NAME` | Tabla donde guardar anomalías |
-| `ANALYSIS_BUCKET_NAME` | Bucket opcional para resultados de análisis histórico |
+```bash
+npm install -g serverless
+```
 
-Otros módulos tienen variables de entorno propias. **No subir llaves ni secretos al repositorio**; usar roles IAM y gestión de secretos apropiada. La configuración exacta de tablas e índices debe corresponder a las consultas del código.
+Instalar las dependencias del proyecto, incluido `serverless-step-functions`, cuando estén declaradas en `package.json`:
 
-### Estado del despliegue
+```bash
+npm install
+```
 
-No se encontró un manifiesto de Serverless Framework, AWS SAM o CDK en la rama `main` revisada. Por tanto, **no existe todavía un comando de despliegue validado** documentable para este repositorio. Los ejemplos JSON en `ArchivosJASONDePrueba/` sirven como referencia de entradas; su existencia no demuestra que los flujos estén integrados.
+Si el plugin no está instalado, puede agregarse mediante:
 
-## Roadmap
+```bash
+npm install --save-dev serverless-step-functions
+```
 
-- [x] Organizar funciones iniciales de telemetría, análisis de riesgo y utilización.
-- [x] Escribir parte de la lógica Lambda en Python con integraciones AWS.
-- [ ] Unificar nombres, contratos JSON y manejo de errores entre funciones.
-- [ ] Crear infraestructura como código (API Gateway, Lambdas, DynamoDB, S3, SageMaker y permisos).
-- [ ] Crear y probar la máquina de estados de Step Functions con bifurcaciones normal/warning/critical.
-- [ ] Completar creación y cierre de incidentes, técnicos, repuestos, intervenciones y notificaciones.
-- [ ] Configurar SageMaker y validar inferencia con datos de prueba.
-- [ ] Normalizar telemetría de S3 a JSONL/Parquet e integrar BigLake/BigQuery Omni.
-- [ ] Implementar autenticación y autorización por tenant/rol.
-- [ ] Diseñar y comprobar estrategia multirregión (replicación S3, DynamoDB y failover).
-- [ ] Añadir pruebas automáticas, logs, métricas, alarmas y control de costos.
-- [ ] Construir endpoints del frontend y preparar demostración/video del hackathon.
+### 3. Configurar AWS
 
-## Consideraciones técnicas
+El entorno desde el cual se realizará el despliegue debe disponer de credenciales AWS válidas y autorización para crear y actualizar los recursos del proyecto.
 
-- La clasificación del riesgo y el mantenimiento combinan reglas de negocio y resultados de modelos; no toda la lógica es ML.
-- Los umbrales de riesgo actuales son de prototipo y deben calibrarse con información real.
-- Dos regiones no implican alta disponibilidad automáticamente: se requieren replicación, enrutamiento, monitoreo y procedimientos de recuperación.
-- Una tabla de telemetría de estado actual y un histórico analítico tienen patrones de lectura distintos: revisar diseño de claves, índices y retención.
-- La arquitectura de referencia no contempla máquinas virtuales.
+Se puede comprobar la identidad activa con:
 
-## Equipo y contribución
+```bash
+aws sts get-caller-identity
+```
 
-Proyecto colaborativo para hackathon. Los integrantes pueden abrir *issues* y *pull requests* para implementar las funcionalidades pendientes. Antes de integrar una Lambda, documentar su entrada, salida, errores, recursos AWS e IAM requeridos.
+No se deben publicar ni compartir las claves privadas, los tokens de sesión o las credenciales de acceso.
+
+### 4. Desplegar mediante Serverless
+
+Desde la raíz del proyecto:
+
+```bash
+serverless deploy --stage dev --region us-east-1
+```
+
+Serverless utiliza la configuración de `serverless.yml` para gestionar los recursos declarados, entre ellos AWS Lambda, API Gateway, DynamoDB, Amazon S3, Step Functions y Amazon EventBridge.
+
+El despliegue queda sujeto a los permisos de la cuenta AWS y a la disponibilidad de los recursos externos requeridos.
+
+Para verificar el estado del stack:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name arquifusioncorp-dev \
+  --region us-east-1 \
+  --query "Stacks[0].StackStatus" \
+  --output text
+```
+
+Un despliegue exitoso debe mostrar `CREATE_COMPLETE` o `UPDATE_COMPLETE`, según corresponda.
 
 ---
 
-**ArquiFusionCorp** — datos operativos, análisis inteligente y decisiones de mantenimiento sobre una arquitectura serverless multicloud.
+## Seguridad de las credenciales de Azure
+
+ArquiFusionCorp incorpora una integración entre Amazon S3 y Azure Blob Storage para conservar copias de información operativa.
+
+Por buenas prácticas de seguridad, **las credenciales privadas de Microsoft Azure no están almacenadas en este repositorio de GitHub**.
+
+Publicar estas credenciales en archivos como `serverless.yml`, código Python o documentación permitiría que terceros pudieran utilizarlas indebidamente.
+
+En su lugar, la integración utiliza **AWS Secrets Manager**, que permite almacenar las credenciales de forma segura y recuperarlas durante la ejecución de AWS Lambda.
+
+El secreto utilizado en el entorno de desarrollo se identifica mediante:
+
+```text
+arquifusioncorp/dev/azure-blob
+```
+
+Este secreto contiene las siguientes claves:
+
+```text
+AZURE_TENANT_ID
+AZURE_CLIENT_ID
+AZURE_CLIENT_SECRET
+AZURE_STORAGE_ACCOUNT
+```
+
+Los valores reales no se incluyen en el proyecto.
+
+La Lambda `replicarS3Azure` obtiene las credenciales directamente desde AWS Secrets Manager y las utiliza para autenticarse con Microsoft Entra ID y escribir archivos en Azure Blob Storage.
+
+### Despliegue desde otra cuenta AWS
+
+Si el proyecto se despliega desde otra cuenta AWS, el secreto existente en la cuenta original no estará disponible automáticamente.
+
+Para habilitar la integración con Azure, será necesario configurar en la cuenta de destino un secreto con el nombre esperado y las credenciales correspondientes, o establecer un mecanismo de acceso entre cuentas con los permisos necesarios.
+
+**El ARN de un secreto no concede acceso por sí solo.** El acceso entre cuentas requiere políticas IAM, permisos sobre el secreto y una configuración compatible de AWS KMS.
+
+En consecuencia, ejecutar `serverless deploy` desde otra cuenta puede crear la infraestructura AWS declarada, pero **no garantiza que la integración con Azure ni los modelos de SageMaker funcionen sin preparación adicional**.
+
+Esta separación protege las credenciales y evita incluir información confidencial en el control de versiones.
+
+---
+
+## Conclusión
+
+**ArquiFusionCorp** propone un enfoque de mantenimiento industrial inteligente y proactivo mediante el monitoreo de maquinaria, el análisis predictivo y la automatización de procesos.
+
+Su implementación utiliza servicios serverless y contempla una integración multicloud entre AWS y Azure, priorizando la automatización de infraestructura, la gestión centralizada de información y la protección de credenciales sensibles.
